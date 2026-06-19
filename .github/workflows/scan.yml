@@ -1,0 +1,46 @@
+name: crypto-signal-scan
+
+# Runs on GitHub's servers — works with your laptop OFF.
+# GitHub cron fires at most every 5 minutes (and can be a few minutes late
+# under load), which suits 5m/15m signals.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}   # lets you run it manually from the Actions tab
+
+concurrency:
+  group: signal-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Persist the "already alerted" state between runs so you don't get
+      # duplicate notifications for the same cross.
+      - name: Restore alert state
+        uses: actions/cache@v4
+        with:
+          path: scanner/state.json
+          key: signal-state-${{ github.run_id }}
+          restore-keys: |
+            signal-state-
+
+      - name: Run scan
+        working-directory: scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TIMEFRAMES: '5m,15m'
+          MA_TYPE: 'sma'
+          TOP_N: '50'
+          REQUIRE_MACD: 'false'
+        run: node scan.js --once

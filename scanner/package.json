@@ -1,0 +1,13 @@
+{
+  "name": "crypto-signal-scanner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "24/7 cloud scanner that pushes RSI/RSI-MA cross alerts to your phone",
+  "main": "scan.js",
+  "scripts": {
+    "scan": "node scan.js --once",
+    "loop": "node scan.js --loop",
+    "test": "node scan.js --test"
+  },
+  "engines": { "node": ">=18" }
+}

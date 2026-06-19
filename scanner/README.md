@@ -1,0 +1,94 @@
+# Crypto Signal Scanner — 24/7 phone alerts
+
+Runs in the cloud and pushes a notification to your phone whenever an **RSI / RSI-MA
+cross** appears on the **5m and 15m** timeframes for the top-50 coins — using the same
+strategy math as the web tool. It keeps running **even when your laptop is off**.
+
+The alert tells you the coin, side (LONG/SHORT), timeframe, RSI/RSI-MA values, whether
+**MACD** agrees, the price, and a TradingView link.
+
+---
+
+## 1. Pick a notification channel
+
+You only need **one**. Telegram is recommended.
+
+### Telegram (recommended)
+1. In Telegram, open **@BotFather** → send `/newbot` → follow prompts → copy the **bot token**.
+2. Send any message to your new bot (so it can message you back).
+3. Get your **chat id**: open `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a
+   browser and read `result[].message.chat.id` (a number).
+4. You now have `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+
+### ntfy.sh (easiest, no account)
+1. Install the **ntfy** app (iOS/Android).
+2. Subscribe to a hard-to-guess topic, e.g. `my-crypto-signals-9f3k2`.
+3. Use that as `NTFY_TOPIC`. (Anyone who knows the topic can read it, so make it random.)
+
+### Discord
+Server → Channel → Edit → Integrations → Webhooks → New Webhook → copy URL → `DISCORD_WEBHOOK`.
+
+---
+
+## 2A. Run it FREE on GitHub Actions (laptop can be off) — recommended
+
+1. Put this whole project in a **GitHub repository** (the repo root must contain the
+   `.github/workflows/scan.yml` file and the `scanner/` folder).
+2. In the repo: **Settings → Secrets and variables → Actions → New repository secret**.
+   Add the secrets for your channel, e.g.:
+   - `TELEGRAM_BOT_TOKEN`
+   - `TELEGRAM_CHAT_ID`
+   - (or `NTFY_TOPIC`, or `DISCORD_WEBHOOK`)
+3. Go to the **Actions** tab → enable workflows → open **crypto-signal-scan** →
+   **Run workflow** once to test. You should get a notification within a minute if a
+   cross exists; otherwise it logs `0 fresh crosses`.
+4. From now on it runs **automatically every ~5 minutes**, on GitHub's servers, with your
+   laptop off. Free for public repos (and within the generous free minutes for private).
+
+> Note: GitHub cron runs every 5 min and can occasionally be delayed a few minutes during
+> peak load. Good enough for 5m/15m. If you want second-by-second checking, use 2B.
+
+## 2B. Run it on an always-on machine (VPS / Raspberry Pi / Railway / Fly.io)
+
+```bash
+cd scanner
+cp .env.example .env        # then fill in your channel secrets
+node scan.js --test         # send a test push
+node scan.js --loop         # scan continuously (every SCAN_INTERVAL seconds)
+```
+
+To keep it alive on a server, use `pm2`:
+```bash
+npm i -g pm2
+pm2 start scan.js --name signals -- --loop
+pm2 save && pm2 startup
+```
+
+On a $4–5/mo VPS this checks every 60s — the most responsive option.
+
+---
+
+## 3. Test locally first
+
+```bash
+cd scanner
+TELEGRAM_BOT_TOKEN=xxx TELEGRAM_CHAT_ID=yyy node scan.js --test   # should ping your phone
+TELEGRAM_BOT_TOKEN=xxx TELEGRAM_CHAT_ID=yyy node scan.js --once   # one real scan pass
+```
+(On Windows PowerShell: `$env:TELEGRAM_BOT_TOKEN="xxx"; node scan.js --test`)
+
+---
+
+## Settings (env vars)
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `TIMEFRAMES` | `5m,15m` | Comma list of timeframes to scan |
+| `MA_TYPE` | `sma` | `sma` or `ema` — must match the web tool's RSI-MA |
+| `MA_LEN` / `RSI_LEN` | `14` / `14` | RSI-MA and RSI lengths |
+| `TOP_N` | `50` | How many top coins (by volume) to scan |
+| `REQUIRE_MACD` | `false` | `true` = only alert when MACD also agrees (fewer, cleaner) |
+| `BINANCE_BASE` | `https://data-api.binance.vision` | Public market-data host (works from cloud) |
+
+**Dedup:** each cross is alerted once. The `state.json` file remembers what was already
+sent (persisted via GitHub Actions cache, or on disk in loop mode).

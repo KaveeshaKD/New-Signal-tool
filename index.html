@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Crypto Signal Scanner — RSI / RSI-MA Crossover</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#121722; --panel2:#1a2130; --border:#222c3d;
+    --text:#d6deeb; --muted:#7b88a1; --green:#16c784; --red:#ea3943;
+    --accent:#4c8dff; --amber:#f0b90b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+  header{display:flex;align-items:center;gap:16px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--border);flex-wrap:wrap}
+  header h1{font-size:17px;margin:0;font-weight:600;letter-spacing:.3px}
+  header h1 span{color:var(--accent)}
+  .controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto}
+  .seg{display:flex;background:var(--panel2);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .seg button{background:none;border:none;color:var(--muted);padding:7px 14px;cursor:pointer;font-size:13px;font-weight:600}
+  .seg button.active{background:var(--accent);color:#fff}
+  .btn{background:var(--accent);border:none;color:#fff;padding:8px 16px;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px}
+  .btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  label.chk{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;cursor:pointer}
+  .layout{display:grid;grid-template-columns:minmax(420px,1fr) 1.4fr;gap:14px;padding:14px}
+  @media(max-width:1100px){.layout{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .card-h{padding:11px 15px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;font-weight:600}
+  .card-h .pill{font-size:11px;color:var(--muted);font-weight:500;margin-left:auto}
+  .status{padding:8px 15px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
+  .dot.live{background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:right;padding:9px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0;background:var(--panel);cursor:pointer;user-select:none}
+  tbody tr{cursor:pointer}
+  tbody tr:hover{background:var(--panel2)}
+  tbody tr.sel{background:rgba(76,141,255,.12)}
+  .tag{padding:3px 9px;border-radius:6px;font-weight:700;font-size:12px;display:inline-block}
+  .tag.long{background:rgba(22,199,132,.15);color:var(--green)}
+  .tag.short{background:rgba(234,57,67,.15);color:var(--red)}
+  .conf{display:inline-flex;gap:3px}
+  .conf i{width:7px;height:7px;border-radius:2px;background:var(--border)}
+  .conf i.on{background:var(--amber)}
+  .filters{display:flex;gap:6px;padding:0 4px 4px}
+  .ftab{flex:1;padding:7px 8px;font-size:12px;font-weight:600;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:7px;cursor:pointer;transition:.12s}
+  .ftab:hover{color:var(--text)}
+  .ftab.active{color:#fff;background:var(--accent);border-color:var(--accent)}
+  .ftab small{display:block;font-weight:400;font-size:10px;opacity:.8}
+  .pendtag{margin-left:6px;font-size:9.5px;font-weight:700;color:var(--amber);border:1px solid var(--amber);border-radius:4px;padding:1px 4px;vertical-align:middle}
+  .grade{padding:3px 8px;border-radius:6px;font-weight:700;font-size:12px;display:inline-block;min-width:42px;text-align:center}
+  .grade.gA{background:rgba(22,199,132,.18);color:var(--green)}
+  .grade.gB{background:rgba(76,141,255,.18);color:var(--accent)}
+  .grade.gC{background:rgba(240,185,11,.18);color:var(--amber)}
+  .grade.gD{background:rgba(234,57,67,.15);color:var(--red)}
+  .chk-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px}
+  @media(max-width:600px){.chk-grid{grid-template-columns:1fr}}
+  .chk-item{font-size:12.5px}
+  .chk-item.ok{color:var(--green)} .chk-item.no{color:var(--muted);opacity:.65}
+  .chk-item em{color:var(--muted);font-style:normal;font-size:11px}
+  .muted{color:var(--muted)}
+  .plan{margin-top:12px;padding:10px 12px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;font-size:12.5px;line-height:1.7}
+  .plan b{font-weight:700}
+  .sym{font-weight:600}
+  .age{font-size:11px;color:var(--muted)}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+  .scroll{max-height:560px;overflow:auto}
+  .empty{padding:40px 20px;text-align:center;color:var(--muted)}
+  #chart{height:340px;width:100%}
+  #rsiChart{height:150px;width:100%;border-top:1px solid var(--border)}
+  #macdChart{height:140px;width:100%;border-top:1px solid var(--border)}
+  .chart-info{padding:10px 15px;display:flex;gap:20px;align-items:baseline;flex-wrap:wrap}
+  .chart-info .price{font-size:24px;font-weight:700}
+  .chart-info .meta{font-size:12px;color:var(--muted)}
+  .legend{display:flex;gap:16px;padding:8px 15px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .swatch{width:14px;height:3px;border-radius:2px;display:inline-block}
+  .settings{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:10px 15px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)}
+  .settings input{width:54px;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 7px;font-size:12px}
+  .summary{display:flex;gap:8px;padding:10px 15px;flex-wrap:wrap;border-bottom:1px solid var(--border)}
+  .summary .box{flex:1;min-width:90px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;text-align:center}
+  .summary .box b{display:block;font-size:20px}
+  .summary .box small{color:var(--muted);font-size:11px}
+  a.link{color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ Crypto <span>Signal Scanner</span></h1>
+  <div class="controls">
+    <div class="seg" id="tfSeg">
+      <button data-tf="5m">5m</button>
+      <button data-tf="15m" class="active">15m</button>
+      <button data-tf="30m">30m</button>
+    </div>
+    <label class="chk"><input type="checkbox" id="autoChk" checked> Auto-refresh</label>
+    <button class="btn" id="scanBtn">Scan Top 50</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- LEFT: scanner -->
+  <div class="card">
+    <div class="card-h">Trade Signals <span class="pill" id="tfLabel">15m</span></div>
+    <div class="settings">
+      <span>RSI <input type="number" id="rsiLen" value="14" min="2" max="50"></span>
+      <span>RSI-MA <input type="number" id="maLen" value="14" min="2" max="50"></span>
+      <span>MA type
+        <select id="maType" style="background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px">
+          <option value="sma">SMA</option><option value="ema" selected>EMA</option>
+        </select>
+      </span>
+      <span>Cross within <input type="number" id="lookback" value="3" min="1" max="10"> bars</span>
+      <span>Min score <input type="number" id="minScore" value="0" min="0" max="100"></span>
+      <label class="chk" style="font-size:12px"><input type="checkbox" id="htfChk" checked> HTF filter</label>
+    </div>
+    <div class="summary" id="summary"></div>
+    <div class="filters" id="filterTabs">
+      <button class="ftab active" data-f="rsi">RSI cross<small id="c-rsi">—</small></button>
+      <button class="ftab" data-f="macd">MACD cross<small id="c-macd">—</small></button>
+      <button class="ftab" data-f="both">RSI + MACD<small id="c-both">—</small></button>
+    </div>
+    <div class="status">
+      <span><span class="dot" id="liveDot"></span><span id="statusText">Idle — press Scan</span></span>
+      <span id="progress"></span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th data-sort="symbol">Coin</th>
+          <th data-sort="side">Signal</th>
+          <th data-sort="score">Score</th>
+          <th data-sort="rsi">RSI</th>
+          <th data-sort="ma">RSI-MA</th>
+          <th data-sort="price">Price</th>
+          <th data-sort="chg">24h%</th>
+          <th data-sort="age">Age</th>
+        </tr></thead>
+        <tbody id="sigBody"><tr><td colspan="8" class="empty">No scan yet. Click <b>Scan Top 50</b>.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- RIGHT: chart -->
+  <div class="card">
+    <div class="card-h"><span id="chartSym">—</span>
+      <span class="pill"><a class="link" id="tvLink" target="_blank" href="#">Open in TradingView ↗</a></span>
+    </div>
+    <div class="chart-info">
+      <span class="price" id="livePrice">—</span>
+      <span class="meta" id="chartMeta"></span>
+    </div>
+    <div id="chart"></div>
+    <div class="legend">
+      <span><i class="swatch" style="background:#4c8dff"></i> RSI</span>
+      <span><i class="swatch" style="background:#f0b90b"></i> RSI-MA</span>
+      <span><i class="swatch" style="background:#7b88a1"></i> Levels 30/50/70</span>
+    </div>
+    <div id="rsiChart"></div>
+    <div class="legend">
+      <span><i class="swatch" style="background:#4c8dff"></i> MACD</span>
+      <span><i class="swatch" style="background:#f0b90b"></i> Signal</span>
+      <span><i class="swatch" style="background:#16c784"></i> Histogram</span>
+    </div>
+    <div id="macdChart"></div>
+    <div class="card-h" style="border-top:1px solid var(--border)">Confirmation breakdown</div>
+    <div id="breakdown" style="padding:12px 15px"><span class="muted">Select a coin to see its confirmation checklist.</span></div>
+  </div>
+</div>
+
+<script>
+const API = 'https://api.binance.com';
+// Top 50 coins by market cap (USDT pairs on Binance). Stablecoins excluded.
+const TOP50 = ['BTC','ETH','BNB','SOL','XRP','DOGE','ADA','TRX','AVAX','LINK',
+  'TON','SHIB','DOT','BCH','NEAR','LTC','MATIC','UNI','ICP','APT',
+  'ETC','XLM','FIL','HBAR','ATOM','RNDR','ARB','VET','OP','INJ',
+  'IMX','MKR','GRT','AAVE','SUI','RUNE','FTM','THETA','ALGO','SEI',
+  'TIA','LDO','FLOW','EGLD','SAND','AXS','GALA','MANA','SNX','PEPE']
+  .map(s => s + 'USDT');
+
+let state = {
+  tf:'15m', rows:[], selected:null, sortKey:'score', sortDir:-1, filter:'rsi',
+  autoTimer:null, livePoll:null, chart:null, rsiChart:null,
+  candle:null, vol:null, rsiSeries:null, maSeries:null,
+  macdChart:null, macdHist:null, macdLine:null, macdSig:null, macdZero:null, _sync:false,
+};
+
+/* ---------- indicators ---------- */
+function calcRSI(closes, period){
+  const rsi = new Array(closes.length).fill(null);
+  if(closes.length <= period) return rsi;
+  let gain=0, loss=0;
+  for(let i=1;i<=period;i++){ const c=closes[i]-closes[i-1]; if(c>=0)gain+=c; else loss-=c; }
+  let ag=gain/period, al=loss/period;
+  rsi[period]= al===0?100:100-100/(1+ag/al);
+  for(let i=period+1;i<closes.length;i++){
+    const c=closes[i]-closes[i-1], g=c>0?c:0, l=c<0?-c:0;
+    ag=(ag*(period-1)+g)/period; al=(al*(period-1)+l)/period;
+    rsi[i]= al===0?100:100-100/(1+ag/al);
+  }
+  return rsi;
+}
+function sma(arr, period){
+  const out=new Array(arr.length).fill(null); let sum=0; const buf=[];
+  for(let i=0;i<arr.length;i++){ if(arr[i]==null){out[i]=null;continue;}
+    buf.push(arr[i]); sum+=arr[i]; if(buf.length>period)sum-=buf.shift();
+    if(buf.length===period)out[i]=sum/period; }
+  return out;
+}
+function ema(arr, period){
+  const out=new Array(arr.length).fill(null); const k=2/(period+1); let prev=null;
+  for(let i=0;i<arr.length;i++){ if(arr[i]==null){out[i]=null;continue;}
+    if(prev==null){ // seed with first available value
+      prev=arr[i];
+    } else { prev=arr[i]*k+prev*(1-k); }
+    out[i]=prev; }
+  return out;
+}
+function emaPrice(arr, period){ return ema(arr, period); }
+function macd(closes, fast=12, slow=26, signal=9){
+  const ef=ema(closes,fast), es=ema(closes,slow);
+  const line=closes.map((_,i)=>(ef[i]!=null&&es[i]!=null)?ef[i]-es[i]:null);
+  const sig=ema(line,signal);
+  const hist=line.map((_,i)=>(line[i]!=null&&sig[i]!=null)?line[i]-sig[i]:null);
+  return {line, signal:sig, hist};
+}
+function adx(highs, lows, closes, period=14){
+  const len=closes.length;
+  const tr=new Array(len).fill(0), pDM=new Array(len).fill(0), mDM=new Array(len).fill(0);
+  for(let i=1;i<len;i++){
+    const up=highs[i]-highs[i-1], dn=lows[i-1]-lows[i];
+    pDM[i]=(up>dn&&up>0)?up:0;
+    mDM[i]=(dn>up&&dn>0)?dn:0;
+    tr[i]=Math.max(highs[i]-lows[i], Math.abs(highs[i]-closes[i-1]), Math.abs(lows[i]-closes[i-1]));
+  }
+  const plusDI=new Array(len).fill(null), minusDI=new Array(len).fill(null), dx=new Array(len).fill(null), adxA=new Array(len).fill(null);
+  if(len<=period*2) return {plusDI,minusDI,adx:adxA};
+  let atr=0,sp=0,sm=0;
+  for(let i=1;i<=period;i++){atr+=tr[i];sp+=pDM[i];sm+=mDM[i];}
+  for(let i=period+1;i<len;i++){
+    atr=atr-atr/period+tr[i];
+    sp=sp-sp/period+pDM[i];
+    sm=sm-sm/period+mDM[i];
+    const pdi=100*sp/atr, mdi=100*sm/atr;
+    plusDI[i]=pdi; minusDI[i]=mdi;
+    dx[i]=100*Math.abs(pdi-mdi)/((pdi+mdi)||1);
+  }
+  const start=period*2;
+  let sum=0,c=0;
+  for(let i=period+1;i<=start;i++){ if(dx[i]!=null){sum+=dx[i];c++;} }
+  let a=c?sum/c:null; adxA[start]=a;
+  for(let i=start+1;i<len;i++){ if(dx[i]!=null&&a!=null){ a=(a*(period-1)+dx[i])/period; adxA[i]=a; } }
+  return {plusDI, minusDI, adx:adxA};
+}
+function atr(highs,lows,closes,period=14){
+  const len=closes.length, out=new Array(len).fill(null); if(len<=period)return out;
+  let a=0; for(let i=1;i<=period;i++){a+=Math.max(highs[i]-lows[i],Math.abs(highs[i]-closes[i-1]),Math.abs(lows[i]-closes[i-1]));}
+  a/=period; out[period]=a;
+  for(let i=period+1;i<len;i++){const tr=Math.max(highs[i]-lows[i],Math.abs(highs[i]-closes[i-1]),Math.abs(lows[i]-closes[i-1]));a=(a*(period-1)+tr)/period;out[i]=a;}
+  return out;
+}
+// higher-timeframe bias: combine RSI-vs-RSIMA and EMA50-vs-EMA200
+function htfBias(kl, cfg){
+  if(!kl||kl.length<60) return null;
+  const closes=kl.map(k=>+k[4]);
+  const r=calcRSI(closes,cfg.rsiLen);
+  const m=cfg.maType==='ema'?ema(r,cfg.maLen):sma(r,cfg.maLen);
+  const e50=ema(closes,50), e200=ema(closes,200);
+  const n=closes.length-1; let s=0;
+  if(r[n]!=null&&m[n]!=null) s+= r[n]>m[n]?1:-1;
+  if(e50[n]!=null&&e200[n]!=null) s+= e50[n]>e200[n]?1:-1;
+  return s>0?'bull':s<0?'bear':'neutral';
+}
+
+/* ---------- core strategy + confirmation engine ---------- */
+function analyze(kl, cfg, htfKl){
+  const closes=kl.map(k=>+k[4]), opens=kl.map(k=>+k[1]),
+        highs=kl.map(k=>+k[2]),  lows=kl.map(k=>+k[3]), vols=kl.map(k=>+k[5]);
+  const rsi  = calcRSI(closes, cfg.rsiLen);
+  const rsiMa= cfg.maType==='ema' ? ema(rsi, cfg.maLen) : sma(rsi, cfg.maLen);
+  const e50=ema(closes,50), e200=ema(closes,200);
+  const m=macd(closes), ax=adx(highs,lows,closes,14), avgVol=sma(vols,20), atr14=atr(highs,lows,closes,14);
+  const n=closes.length-1;
+
+  // last kline from Binance is the still-forming candle; evaluate on CLOSED candles only
+  const live=n, lastClosed=n-1;
+
+  // most recent RSI / RSI-MA cross within lookback closed bars
+  let side=null, crossIdx=null;
+  for(let i=lastClosed; i>=Math.max(1,lastClosed-cfg.lookback+1); i--){
+    const p=i-1;
+    if(rsi[p]==null||rsi[i]==null||rsiMa[p]==null||rsiMa[i]==null) continue;
+    const up=rsi[p]<=rsiMa[p] && rsi[i]>rsiMa[i];
+    const down=rsi[p]>=rsiMa[p] && rsi[i]<rsiMa[i];
+    if(up){ side='LONG'; crossIdx=i; break; }
+    if(down){ side='SHORT'; crossIdx=i; break; }
+  }
+  // confirmation candle = first CLOSED candle after the cross, must close in trade direction
+  const age = side!=null ? lastClosed-crossIdx : null;
+  const confIdx = crossIdx!=null ? crossIdx+1 : null;
+  const hasConf = confIdx!=null && confIdx<=lastClosed;
+  const confirmOk = hasConf && (side==='LONG' ? closes[confIdx]>=opens[confIdx] : closes[confIdx]<=opens[confIdx]);
+  const pending = side!=null && !hasConf;            // cross done, waiting for the candle to close
+
+  // most recent MACD line / signal cross (blue vs orange) on closed bars
+  let macdCrx=null, macdAge=null;
+  for(let i=lastClosed; i>=Math.max(1,lastClosed-cfg.lookback-2); i--){
+    const p=i-1;
+    if(m.line[p]==null||m.signal[p]==null||m.line[i]==null||m.signal[i]==null) continue;
+    if(m.line[p]<=m.signal[p]&&m.line[i]>m.signal[i]){ macdCrx='bull'; macdAge=lastClosed-i; break; }
+    if(m.line[p]>=m.signal[p]&&m.line[i]<m.signal[i]){ macdCrx='bear'; macdAge=lastClosed-i; break; }
+  }
+
+  const c=lastClosed;                                 // evaluate confirmations on the last closed bar
+  const cur=rsi[live], prev=rsi[live-1];
+  const bias = (cfg.useHtf && htfKl) ? htfBias(htfKl,cfg) : null;
+  const checks=[];
+  const add=(name,pass,w,detail)=>checks.push({name,pass:!!pass,w,detail:detail||''});
+
+  if(side){
+    const L = side==='LONG';
+    // 1) Confirmation candle after the RSI cross (your core rule)
+    add('Confirm candle', confirmOk, 2, pending?'awaiting close':(confirmOk?('closed '+(L?'green':'red')):'candle opposed'));
+    // 2) MACD line / signal cross in the trade direction (blue & orange cross)
+    add('MACD cross', macdCrx===(L?'bull':'bear'), 1.5, macdCrx?(macdCrx+' cross · '+macdAge+'b ago'):'no recent cross');
+    // 3) MACD position (line on the correct side of signal)
+    add('MACD position', m.line[c]!=null&&m.signal[c]!=null&&(L?m.line[c]>m.signal[c]:m.line[c]<m.signal[c]), 1, m.hist[c]!=null?'hist '+m.hist[c].toFixed(4):'n/a');
+    // 4) RSI momentum (direction of the RSI line itself)
+    add('RSI momentum', L?rsi[c]>rsi[c-1]:rsi[c]<rsi[c-1], 1, 'RSI '+(rsi[c]>rsi[c-1]?'rising':'falling'));
+    // 5) ADX trend strength + directional movement (filters chop)
+    const av=ax.adx[c], pdi=ax.plusDI[c], mdi=ax.minusDI[c];
+    const trending=av!=null&&av>=20, diOk=pdi!=null&&mdi!=null&&(L?pdi>mdi:mdi>pdi);
+    add('ADX strength', trending&&diOk, 1.5, av!=null?('ADX '+av.toFixed(0)+(diOk?' · DI ok':' · DI opp')):'n/a');
+    // 6) Trend stack EMA50 vs EMA200
+    add('EMA50/200 trend', e50[c]!=null&&e200[c]!=null&&(L?e50[c]>e200[c]:e50[c]<e200[c]), 1, '');
+    // 7) Price relative to EMA200 (macro side)
+    add('Price vs EMA200', e200[c]!=null&&(L?closes[c]>e200[c]:closes[c]<e200[c]), 1, '');
+    // 8) Higher-timeframe alignment (strongest filter)
+    if(cfg.useHtf) add('HTF align ('+cfg.htf2+')', L?bias==='bull':bias==='bear', 2, bias||'n/a');
+    // 9) RSI zone — room to run, not chasing an exhausted move
+    add('RSI zone room', L?(rsi[c]<68):(rsi[c]>32), 1, 'RSI '+(rsi[c]?.toFixed(0)??'—'));
+    // 10) Volume surge vs 20-bar average
+    add('Volume surge', avgVol[c]!=null&&vols[c]>avgVol[c], 1, '');
+  }
+
+  const totW=checks.reduce((s,c)=>s+c.w,0);
+  const gotW=checks.reduce((s,c)=>s+(c.pass?c.w:0),0);
+  const score = totW ? Math.round(100*gotW/totW) : 0;
+  const grade = score>=75?'A':score>=58?'B':score>=40?'C':'D';
+  const a14=atr14[n];
+
+  return { closes, rsi, rsiMa, macd:m, adxR:ax, e50, e200,
+           side, age, crossIdx, confIdx, pending, confirmOk, macdCrx, macdAge, bias, checks, score, grade,
+           status: side ? (pending?'PENDING':'READY') : null,
+           confirms:checks.filter(c=>c.pass).map(c=>c.name),
+           rsiNow:cur, maNow:rsiMa[n], price:closes[n],
+           atr:a14, atrPct:a14!=null?100*a14/closes[n]:null,
+           times: kl.map(k=>Math.floor(k[0]/1000)) };
+}
+
+/* ---------- data ---------- */
+async function fetchKlines(symbol, interval, limit=300){
+  const r = await fetch(`${API}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+  if(!r.ok) throw new Error('klines '+r.status);
+  return r.json();
+}
+
+async function scan(){
+  const cfg = readCfg();
+  const btn=document.getElementById('scanBtn');
+  btn.disabled=true; setStatus('Scanning '+TOP50.length+' coins…', true);
+  state.rows=[];
+  // 24h tickers for price + change (one bulk call)
+  let tick={};
+  try{
+    const t=await (await fetch(`${API}/api/v3/ticker/24hr`)).json();
+    t.forEach(x=>tick[x.symbol]={chg:+x.priceChangePercent, price:+x.lastPrice});
+  }catch(e){}
+
+  let done=0;
+  const prog=document.getElementById('progress');
+  // throttle in batches of 8 to be gentle on rate limits
+  const batch=8;
+  for(let i=0;i<TOP50.length;i+=batch){
+    const slice=TOP50.slice(i,i+batch);
+    await Promise.all(slice.map(async sym=>{
+      try{
+        const [kl, htfKl]=await Promise.all([
+          fetchKlines(sym, cfg.tf),
+          cfg.useHtf ? fetchKlines(sym, cfg.htf2, 220).catch(()=>null) : Promise.resolve(null)
+        ]);
+        const a=analyze(kl, cfg, htfKl);
+        state.rows.push({
+          symbol:sym, base:sym.replace('USDT',''),
+          side:a.side, score:a.score, grade:a.grade, confirms:a.confirms, age:a.age,
+          status:a.status, pending:a.pending,
+          rsiConfirmed: !!(a.side && !a.pending && a.confirmOk),
+          macdCrx:a.macdCrx, macdAge:a.macdAge,
+          macdSide: a.macdCrx==='bull'?'LONG':a.macdCrx==='bear'?'SHORT':null,
+          rsi:a.rsiNow, ma:a.maNow, bias:a.bias, atrPct:a.atrPct,
+          price:(tick[sym]?.price)??a.price,
+          chg:tick[sym]?.chg??0, _a:a
+        });
+      }catch(e){/* skip failed symbol */}
+      done++; prog.textContent=done+' / '+TOP50.length;
+    }));
+  }
+  setStatus('Scan complete · '+new Date().toLocaleTimeString(), false);
+  btn.disabled=false;
+  render();
+  // auto-select highest-scoring signal if none chosen
+  if(!state.selected){
+    const best=signalRows().slice().sort((a,b)=>b.score-a.score)[0];
+    if(best) selectCoin(best.symbol);
+    else if(state.rows[0]) selectCoin('BTCUSDT');
+  }
+}
+
+const HTF_MAP={'5m':'1h','15m':'1h','30m':'4h'};
+function readCfg(){
+  const tf=state.tf;
+  return {
+    tf,
+    rsiLen:+document.getElementById('rsiLen').value||14,
+    maLen:+document.getElementById('maLen').value||14,
+    maType:document.getElementById('maType').value,
+    lookback:+document.getElementById('lookback').value||2,
+    minScore:+document.getElementById('minScore').value||0,
+    useHtf:document.getElementById('htfChk').checked,
+    htf2:HTF_MAP[tf]||'1h',
+  };
+}
+
+/* ---------- rendering ---------- */
+function signalRows(){
+  const min=readCfg().minScore;
+  const f=state.filter||'rsi';
+  const out=[];
+  for(const r of state.rows){
+    let pass=false, disp=null;
+    if(f==='rsi'){            // confirmed RSI / RSI-MA cross only
+      pass=r.rsiConfirmed && r.score>=min; disp=r.side;
+    } else if(f==='macd'){    // MACD blue/orange line cross (independent of RSI)
+      pass=!!r.macdSide; disp=r.macdSide;
+    } else {                  // both: RSI confirmed AND MACD crossed, same direction
+      pass=r.rsiConfirmed && r.macdSide && r.side===r.macdSide && r.score>=min; disp=r.side;
+    }
+    if(pass) out.push({...r, dispSide:disp, mode:f});
+  }
+  return out;
+}
+function countMode(f){
+  const min=readCfg().minScore; let n=0;
+  for(const r of state.rows){
+    if(f==='rsi') n+= (r.rsiConfirmed && r.score>=min)?1:0;
+    else if(f==='macd') n+= r.macdSide?1:0;
+    else n+= (r.rsiConfirmed && r.macdSide && r.side===r.macdSide && r.score>=min)?1:0;
+  }
+  return n;
+}
+function render(){
+  const cfg=readCfg();
+  const f=state.filter||'rsi';
+  ['rsi','macd','both'].forEach(m=>{const el=document.getElementById('c-'+m); if(el)el.textContent=countMode(m)+' coins';});
+  const sigs=signalRows();
+  // summary
+  const longs=sigs.filter(r=>r.dispSide==='LONG').length;
+  const shorts=sigs.filter(r=>r.dispSide==='SHORT').length;
+  document.getElementById('summary').innerHTML=`
+    <div class="box"><b>${sigs.length}</b><small>Active signals</small></div>
+    <div class="box"><b class="pos">${longs}</b><small>Long</small></div>
+    <div class="box"><b class="neg">${shorts}</b><small>Short</small></div>
+    <div class="box"><b>${state.rows.length}</b><small>Scanned</small></div>`;
+
+  const k=state.sortKey, dir=state.sortDir;
+  sigs.sort((a,b)=>{
+    let av=a[k], bv=b[k];
+    if(k==='symbol'){av=a.base;bv=b.base;}
+    if(k==='side'){av=a.dispSide||'';bv=b.dispSide||'';}
+    if(k==='age'){av=f==='macd'?a.macdAge:a.age;bv=f==='macd'?b.macdAge:b.age;}
+    if(av==null)av=-Infinity; if(bv==null)bv=-Infinity;
+    if(av<bv)return -1*dir; if(av>bv)return 1*dir; return 0;
+  });
+
+  const body=document.getElementById('sigBody');
+  if(!sigs.length){
+    const what={rsi:'RSI / RSI-MA cross',macd:'MACD line cross',both:'RSI + MACD cross together'}[f];
+    body.innerHTML=`<tr><td colspan="8" class="empty">No coins with a ${what} right now on ${cfg.tf} (within ${cfg.lookback} bars${f==='macd'?'':', score ≥'+cfg.minScore}).<br>Try another filter, a longer lookback, or lower min score.</td></tr>`;
+    return;
+  }
+  body.innerHTML=sigs.map(r=>{
+    const sel=r.symbol===state.selected?'sel':'';
+    const sd=r.dispSide;
+    // score cell: RSI-quality grade when an RSI signal exists, else a MACD chip
+    const scoreCell = r.rsiConfirmed
+      ? `<span class="grade g${r.grade}" title="${r.confirms.join(', ')||'none'}">${r.score} ${r.grade}</span>`
+      : `<span class="grade g${sd==='LONG'?'A':'D'}" style="min-width:auto" title="MACD ${r.macdCrx} cross">MACD ${sd==='LONG'?'▲':'▼'}</span>`;
+    const ageTxt = f==='macd'
+      ? (r.macdAge===0?'this candle':r.macdAge+' bar'+(r.macdAge>1?'s':'')+' ago')
+      : (r.age===0?'just confirmed':r.age+' bar'+(r.age>1?'s':'')+' ago');
+    return `<tr class="${sel}" data-sym="${r.symbol}">
+      <td class="sym">${r.base}<span style="color:var(--muted)">/USDT</span></td>
+      <td><span class="tag ${sd.toLowerCase()}">${sd==='LONG'?'▲ LONG':'▼ SHORT'}</span></td>
+      <td>${scoreCell}</td>
+      <td>${r.rsi?.toFixed(1)??'—'}</td>
+      <td>${r.ma?.toFixed(1)??'—'}</td>
+      <td>${fmtPrice(r.price)}</td>
+      <td class="${r.chg>=0?'pos':'neg'}">${r.chg>=0?'+':''}${r.chg.toFixed(2)}%</td>
+      <td class="age">${ageTxt}</td>
+    </tr>`;
+  }).join('');
+  body.querySelectorAll('tr').forEach(tr=>tr.onclick=()=>selectCoin(tr.dataset.sym));
+}
+function fmtPrice(p){
+  if(p==null)return'—';
+  if(p>=1000)return p.toLocaleString(undefined,{maximumFractionDigits:2});
+  if(p>=1)return p.toFixed(3);
+  if(p>=0.01)return p.toFixed(5);
+  return p.toFixed(8);
+}
+
+/* ---------- chart ---------- */
+function initCharts(){
+  const opts={
+    layout:{background:{color:'transparent'},textColor:'#7b88a1'},
+    grid:{vertLines:{color:'#1a2130'},horzLines:{color:'#1a2130'}},
+    timeScale:{borderColor:'#222c3d',timeVisible:true,secondsVisible:false},
+    rightPriceScale:{borderColor:'#222c3d'},
+    crosshair:{mode:0},
+  };
+  state.chart=LightweightCharts.createChart(document.getElementById('chart'),opts);
+  state.candle=state.chart.addCandlestickSeries({upColor:'#16c784',downColor:'#ea3943',borderVisible:false,wickUpColor:'#16c784',wickDownColor:'#ea3943'});
+  state.vol=state.chart.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'',color:'#2a3447'});
+  state.vol.priceScale().applyOptions({scaleMargins:{top:0.82,bottom:0}});
+
+  state.rsiChart=LightweightCharts.createChart(document.getElementById('rsiChart'),{...opts,rightPriceScale:{borderColor:'#222c3d'}});
+  state.rsiSeries=state.rsiChart.addLineSeries({color:'#4c8dff',lineWidth:2});
+  state.maSeries=state.rsiChart.addLineSeries({color:'#f0b90b',lineWidth:2});
+  [30,50,70].forEach(lv=>{
+    const s=state.rsiChart.addLineSeries({color:'#3a4456',lineWidth:1,lineStyle:2,crosshairMarkerVisible:false,lastValueVisible:false,priceLineVisible:false});
+    s._level=lv; state['lvl'+lv]=s;
+  });
+  // MACD pane (momentum confirmation)
+  state.macdChart=LightweightCharts.createChart(document.getElementById('macdChart'),{...opts,rightPriceScale:{borderColor:'#222c3d'}});
+  state.macdHist=state.macdChart.addHistogramSeries({priceLineVisible:false,lastValueVisible:false});
+  state.macdLine=state.macdChart.addLineSeries({color:'#4c8dff',lineWidth:2,priceLineVisible:false});
+  state.macdSig=state.macdChart.addLineSeries({color:'#f0b90b',lineWidth:2,priceLineVisible:false});
+  state.macdZero=state.macdChart.addLineSeries({color:'#3a4456',lineWidth:1,lineStyle:2,crosshairMarkerVisible:false,lastValueVisible:false,priceLineVisible:false});
+
+  // sync time scales across all three panes
+  const charts=[state.chart,state.rsiChart,state.macdChart];
+  charts.forEach(src=>src.timeScale().subscribeVisibleLogicalRangeChange(r=>{
+    if(!r||state._sync)return; state._sync=true;
+    charts.forEach(c=>{if(c!==src)c.timeScale().setVisibleLogicalRange(r);}); state._sync=false;
+  }));
+  window.addEventListener('resize',()=>charts.forEach(c=>c?.applyOptions({width:c===state.chart?document.getElementById('chart').clientWidth:document.getElementById(c===state.rsiChart?'rsiChart':'macdChart').clientWidth})));
+}
+
+async function selectCoin(symbol){
+  state.selected=symbol;
+  render();
+  const cfg=readCfg();
+  const base=symbol.replace('USDT','');
+  document.getElementById('chartSym').textContent=base+' / USDT  ·  '+cfg.tf;
+  document.getElementById('tvLink').href=`https://www.tradingview.com/chart/?symbol=BINANCE:${symbol}`;
+  let kl, htfKl=null;
+  try{
+    [kl, htfKl]=await Promise.all([
+      fetchKlines(symbol, cfg.tf, 300),
+      cfg.useHtf ? fetchKlines(symbol, cfg.htf2, 220).catch(()=>null) : Promise.resolve(null)
+    ]);
+  }catch(e){ return; }
+  const a=analyze(kl, cfg, htfKl);
+
+  state.candle.setData(kl.map(k=>({time:Math.floor(k[0]/1000),open:+k[1],high:+k[2],low:+k[3],close:+k[4]})));
+  state.vol.setData(kl.map(k=>({time:Math.floor(k[0]/1000),value:+k[5],color:(+k[4]>=+k[1])?'rgba(22,199,132,.4)':'rgba(234,57,67,.4)'})));
+  const t=a.times;
+  state.rsiSeries.setData(t.map((tt,i)=>a.rsi[i]!=null?{time:tt,value:a.rsi[i]}:null).filter(Boolean));
+  state.maSeries.setData(t.map((tt,i)=>a.rsiMa[i]!=null?{time:tt,value:a.rsiMa[i]}:null).filter(Boolean));
+  [30,50,70].forEach(lv=>state['lvl'+lv].setData(t.map(tt=>({time:tt,value:lv}))));
+
+  // MACD pane
+  const m=a.macd;
+  state.macdHist.setData(t.map((tt,i)=>m.hist[i]!=null?{time:tt,value:m.hist[i],
+    color:m.hist[i]>=0?'rgba(22,199,132,.6)':'rgba(234,57,67,.6)'}:null).filter(Boolean));
+  state.macdLine.setData(t.map((tt,i)=>m.line[i]!=null?{time:tt,value:m.line[i]}:null).filter(Boolean));
+  state.macdSig.setData(t.map((tt,i)=>m.signal[i]!=null?{time:tt,value:m.signal[i]}:null).filter(Boolean));
+  state.macdZero.setData(t.map(tt=>({time:tt,value:0})));
+
+  // mark the RSI cross + the confirmation candle on the price chart
+  if(a.crossIdx!=null){
+    const L=a.side==='LONG', col=L?'#16c784':'#ea3943';
+    const mk=[{time:t[a.crossIdx],position:L?'belowBar':'aboveBar',color:'#7b88a1',
+               shape:L?'arrowUp':'arrowDown',text:'cross'}];
+    if(a.confIdx!=null && t[a.confIdx]!=null && !a.pending){
+      mk.push({time:t[a.confIdx],position:L?'belowBar':'aboveBar',color:col,
+               shape:L?'arrowUp':'arrowDown',text:a.side+(a.confirmOk?' ✓':' ✗')});
+    }
+    state.candle.setMarkers(mk);
+  } else state.candle.setMarkers([]);
+
+  state.chart.timeScale().fitContent();
+  updateChartInfo(symbol, a);
+  startLivePoll(symbol);
+}
+
+function updateChartInfo(symbol, a){
+  const r=state.rows.find(x=>x.symbol===symbol);
+  const chg=r?.chg??0;
+  document.getElementById('livePrice').textContent='$'+fmtPrice(a.price);
+  let sig= a.side
+    ? `<span class="tag ${a.side.toLowerCase()}">${a.side}</span>${a.pending?' <span class="pendtag">PENDING</span>':''} · <span class="grade g${a.grade}">${a.score} ${a.grade}</span> quality`
+    : 'No active cross';
+  const atrTxt = a.atrPct!=null ? ` &nbsp;·&nbsp; ATR ${a.atrPct.toFixed(2)}%` : '';
+  document.getElementById('chartMeta').innerHTML=
+    `RSI ${a.rsiNow?.toFixed(1)} / MA ${a.maNow?.toFixed(1)} &nbsp;·&nbsp; 24h <span class="${chg>=0?'pos':'neg'}">${chg>=0?'+':''}${chg.toFixed(2)}%</span>${atrTxt} &nbsp;·&nbsp; ${sig}`;
+
+  // confirmation breakdown panel + trade plan
+  const bd=document.getElementById('breakdown');
+  if(a.side && a.checks.length){
+    let plan='';
+    if(a.atr!=null){
+      const L=a.side==='LONG', e=a.price;
+      const sl = L ? e-1.5*a.atr : e+1.5*a.atr;
+      const tp1= L ? e+1.5*a.atr : e-1.5*a.atr;
+      const tp2= L ? e+3*a.atr   : e-3*a.atr;
+      plan=`<div class="plan"><b>Suggested plan</b> (1.5×ATR risk · 1:2 R) &nbsp;
+        Entry <b>${fmtPrice(e)}</b> · SL <b class="neg">${fmtPrice(sl)}</b> ·
+        TP1 <b class="pos">${fmtPrice(tp1)}</b> · TP2 <b class="pos">${fmtPrice(tp2)}</b></div>`;
+    }
+    bd.innerHTML='<div class="chk-grid">'+a.checks.map(c=>
+      `<span class="chk-item ${c.pass?'ok':'no'}">${c.pass?'✓':'✗'} ${c.name}${c.detail?` <em>${c.detail}</em>`:''}</span>`
+    ).join('')+'</div>'+plan;
+  } else if(a.macdCrx){
+    const ms=a.macdCrx==='bull'?'LONG':'SHORT';
+    bd.innerHTML=`<span class="chk-item ok">✓ MACD ${a.macdCrx} cross <em>${a.macdAge}b ago → ${ms} bias</em></span>
+      <span class="muted" style="display:block;margin-top:6px">No RSI / RSI-MA cross yet — MACD-only signal. Wait for the RSI cross + confirmation candle for a full setup.</span>`;
+  } else {
+    bd.innerHTML='<span class="muted">No active RSI / RSI-MA or MACD crossover on this coin right now.</span>';
+  }
+}
+
+/* live price via lightweight poll of single-symbol ticker */
+function startLivePoll(symbol){
+  if(state.livePoll)clearInterval(state.livePoll);
+  document.getElementById('liveDot').className='dot live';
+  const poll=async()=>{
+    if(state.selected!==symbol)return;
+    try{
+      const d=await (await fetch(`${API}/api/v3/ticker/price?symbol=${symbol}`)).json();
+      const p=+d.price;
+      document.getElementById('livePrice').textContent='$'+fmtPrice(p);
+    }catch(e){}
+  };
+  poll(); state.livePoll=setInterval(poll,3000);
+}
+
+/* ---------- ui wiring ---------- */
+function setStatus(t,live){document.getElementById('statusText').textContent=t;document.getElementById('liveDot').className='dot'+(live?' live':'');}
+document.getElementById('tfSeg').querySelectorAll('button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('#tfSeg button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active'); state.tf=b.dataset.tf;
+    document.getElementById('tfLabel').textContent=b.dataset.tf;
+    scan().then(()=>{ if(state.selected)selectCoin(state.selected); });
+  };
+});
+document.getElementById('scanBtn').onclick=()=>scan();
+document.querySelectorAll('.ftab').forEach(b=>{
+  b.onclick=()=>{
+    state.filter=b.dataset.f;
+    document.querySelectorAll('.ftab').forEach(x=>x.classList.toggle('active',x===b));
+    render();
+  };
+});
+document.querySelectorAll('th[data-sort]').forEach(th=>{
+  th.onclick=()=>{ const k=th.dataset.sort;
+    if(state.sortKey===k)state.sortDir*=-1; else {state.sortKey=k;state.sortDir=-1;}
+    render(); };
+});
+['rsiLen','maLen','maType','lookback','minScore','htfChk'].forEach(id=>{
+  document.getElementById(id).onchange=()=>{ scan().then(()=>{ if(state.selected)selectCoin(state.selected); }); };
+});
+document.getElementById('autoChk').onchange=e=>setupAuto(e.target.checked);
+function setupAuto(on){
+  if(state.autoTimer)clearInterval(state.autoTimer);
+  if(on)state.autoTimer=setInterval(()=>scan().then(()=>{ if(state.selected)selectCoin(state.selected); }), 60000);
+}
+
+/* ---------- boot ---------- */
+initCharts();
+setupAuto(true);
+scan();
+</script>
+</body>
+</html>
