@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       # Persist the "already alerted" state between runs so you don't get
       # duplicate notifications for the same cross.
