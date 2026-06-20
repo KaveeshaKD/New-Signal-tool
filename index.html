@@ -65,6 +65,23 @@
   .muted{color:var(--muted)}
   .plan{margin-top:12px;padding:10px 12px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;font-size:12.5px;line-height:1.7}
   .plan b{font-weight:700}
+  #tradeCard{margin-top:16px}
+  .setups{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;padding:14px}
+  .setup{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel2);position:relative;cursor:pointer;transition:.12s}
+  .setup:hover{border-color:var(--accent)}
+  .setup.sgood{border-left:3px solid var(--green)}
+  .setup.scaut{border-left:3px solid var(--amber)}
+  .setup.sbad{border-left:3px solid var(--red);opacity:.78}
+  .setup .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .setup .nm{font-weight:700;font-size:15px}
+  .setup .rate{font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px}
+  .rate.good{background:rgba(22,199,132,.18);color:var(--green)}
+  .rate.caut{background:rgba(240,185,11,.18);color:var(--amber)}
+  .rate.bad{background:rgba(234,57,67,.15);color:var(--red)}
+  .setup .row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+  .setup .row b{font-weight:600}
+  .setup .note{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5}
+  .setup .grade{margin-left:6px}
   .sym{font-weight:600}
   .age{font-size:11px;color:var(--muted)}
   .pos{color:var(--green)} .neg{color:var(--red)}
@@ -117,6 +134,8 @@
       <span>Cross within <input type="number" id="lookback" value="3" min="1" max="10"> bars</span>
       <span>Min score <input type="number" id="minScore" value="0" min="0" max="100"></span>
       <label class="chk" style="font-size:12px"><input type="checkbox" id="htfChk" checked> HTF filter</label>
+      <span>Leverage <input type="number" id="leverage" value="15" min="1" max="125">x</span>
+      <span>TP <input type="number" id="tpPct" value="15" min="1" max="500">%</span>
     </div>
     <div class="summary" id="summary"></div>
     <div class="filters" id="filterTabs">
@@ -170,6 +189,14 @@
     <div class="card-h" style="border-top:1px solid var(--border)">Confirmation breakdown</div>
     <div id="breakdown" style="padding:12px 15px"><span class="muted">Select a coin to see its confirmation checklist.</span></div>
   </div>
+</div>
+
+<!-- FULL WIDTH: leverage trade setups -->
+<div class="card" id="tradeCard">
+  <div class="card-h">🎯 Trade-Ready Setups <span class="pill" id="levLabel">15x · 15% TP</span>
+    <span class="meta" id="tradeHint" style="font-size:11px;color:var(--muted);font-weight:400"></span>
+  </div>
+  <div id="tradeSetups" class="setups"><span class="muted" style="padding:14px;display:block">Scan to find leverage-ready coins.</span></div>
 </div>
 
 <script>
@@ -432,7 +459,42 @@ function readCfg(){
     minScore:+document.getElementById('minScore').value||0,
     useHtf:document.getElementById('htfChk').checked,
     htf2:HTF_MAP[tf]||'1h',
+    leverage:+document.getElementById('leverage').value||15,
+    tpPct:+document.getElementById('tpPct').value||15,
   };
+}
+
+// Leverage trade math: with a TP set as % of margin, the required price move is
+// tpPct/leverage. Liquidation is ~100/leverage (minus a ~0.5% maintenance buffer).
+// A coin is "suitable" when its volatility (ATR) makes that TP reachable while the
+// ATR-based stop stays comfortably inside the liquidation price.
+function tradeEval(r, cfg){
+  const lev=cfg.leverage, side=r.side;
+  if(!side||r.atrPct==null||!r.price) return null;
+  const L=side==='LONG';
+  const tpMove=cfg.tpPct/lev;                 // price move % to hit TP
+  const liqMove=Math.max(100/lev-0.5, 0.5);   // price move % to liquidation
+  const slMove=1.5*r.atrPct;                   // ATR stop distance %
+  const sign=L?1:-1;
+  const tpPrice=r.price*(1+sign*tpMove/100);
+  const slPrice=r.price*(1-sign*slMove/100);
+  const liqPrice=r.price*(1-sign*liqMove/100);
+  const estBars=tpMove/r.atrPct;               // ~candles of ATR to reach TP
+  const liqBuffer=slMove>0?liqMove/slMove:99;  // how many SLs fit before liquidation
+  const rr=slMove>0?tpMove/slMove:0;           // reward:risk on price
+  // rating
+  const reach = estBars<=4;                    // TP within ~4 candles
+  const safe  = liqBuffer>=2.5;                // stop well inside liquidation
+  const vol   = r.atrPct>=0.2 && r.atrPct<=3;  // healthy volatility band
+  const strong= r.score>=58;                   // decent signal quality
+  let rating, why;
+  if(reach&&safe&&vol&&strong){ rating='good'; why='TP reachable, stop safely inside liquidation.'; }
+  else if((reach||strong)&&liqBuffer>=1.6&&vol){ rating='caut'; why=!strong?'Signal a bit weak — confirm manually.':(!reach?'TP may take longer to hit.':'Watchable, tighten risk.'); }
+  else { rating='bad';
+    why = liqBuffer<1.6 ? 'Stop too close to liquidation for '+lev+'x — risky.'
+        : !vol ? (r.atrPct<0.2?'Too quiet — TP may not trigger.':'Too volatile for '+lev+'x.')
+        : estBars>4 ? 'TP likely too far to hit soon.' : 'Low confluence.'; }
+  return {tpMove,liqMove,slMove,tpPrice,slPrice,liqPrice,estBars,liqBuffer,rr,rating,why};
 }
 
 /* ---------- rendering ---------- */
@@ -514,6 +576,38 @@ function render(){
     </tr>`;
   }).join('');
   body.querySelectorAll('tr').forEach(tr=>tr.onclick=()=>selectCoin(tr.dataset.sym));
+  renderTradeSetups();
+}
+function renderTradeSetups(){
+  const cfg=readCfg();
+  document.getElementById('levLabel').textContent=cfg.leverage+'x · '+cfg.tpPct+'% TP';
+  const evals=state.rows.filter(r=>r.rsiConfirmed)
+    .map(r=>({r,t:tradeEval(r,cfg)})).filter(x=>x.t);
+  const order={good:0,caut:1,bad:2};
+  evals.sort((a,b)=> order[a.t.rating]-order[b.t.rating] || b.r.score-a.r.score);
+  const goodN=evals.filter(x=>x.t.rating==='good').length;
+  document.getElementById('tradeHint').textContent=
+    `need ${(cfg.tpPct/cfg.leverage).toFixed(2)}% price move for TP · liquidation ≈ ${(100/cfg.leverage).toFixed(1)}% · ${goodN} suitable now`;
+  const el=document.getElementById('tradeSetups');
+  if(!evals.length){ el.innerHTML='<span class="muted" style="padding:14px;display:block">No confirmed signals yet — run a scan or lower Min score.</span>'; return; }
+  const rlabel={good:'✅ SUITABLE',caut:'⚠️ CAUTION',bad:'❌ SKIP'};
+  const cls={good:'sgood',caut:'scaut',bad:'sbad'}, rcls={good:'good',caut:'caut',bad:'bad'};
+  el.innerHTML=evals.map(({r,t})=>`
+    <div class="setup ${cls[t.rating]}" data-sym="${r.symbol}">
+      <div class="top">
+        <span class="nm">${r.base}<span style="color:var(--muted);font-weight:400">/USDT</span>
+          <span class="tag ${r.side.toLowerCase()}">${r.side}</span>
+          <span class="grade g${r.grade}">${r.score} ${r.grade}</span></span>
+        <span class="rate ${rcls[t.rating]}">${rlabel[t.rating]}</span>
+      </div>
+      <div class="row"><span>Entry</span><b>${fmtPrice(r.price)}</b></div>
+      <div class="row"><span>Take-profit (+${cfg.tpPct}%)</span><b class="pos">${fmtPrice(t.tpPrice)} · ${t.tpMove.toFixed(2)}%</b></div>
+      <div class="row"><span>ATR stop-loss</span><b class="neg">${fmtPrice(t.slPrice)} · ${t.slMove.toFixed(2)}%</b></div>
+      <div class="row"><span>Liquidation (${cfg.leverage}x)</span><b>${fmtPrice(t.liqPrice)} · ${t.liqMove.toFixed(1)}%</b></div>
+      <div class="row"><span>~candles to TP · R:R</span><b>${t.estBars.toFixed(1)} · ${t.rr.toFixed(2)}:1</b></div>
+      <div class="note">${t.why}</div>
+    </div>`).join('');
+  el.querySelectorAll('.setup').forEach(d=>d.onclick=()=>selectCoin(d.dataset.sym));
 }
 function fmtPrice(p){
   if(p==null)return'—';
@@ -684,6 +778,10 @@ document.querySelectorAll('th[data-sort]').forEach(th=>{
 });
 ['rsiLen','maLen','maType','lookback','minScore','htfChk'].forEach(id=>{
   document.getElementById(id).onchange=()=>{ scan().then(()=>{ if(state.selected)selectCoin(state.selected); }); };
+});
+// leverage / TP only affect the trade-setup math, not detection — re-render instantly
+['leverage','tpPct'].forEach(id=>{
+  document.getElementById(id).onchange=()=>renderTradeSetups();
 });
 document.getElementById('autoChk').onchange=e=>setupAuto(e.target.checked);
 function setupAuto(on){
