@@ -131,7 +131,7 @@
           <option value="sma">SMA</option><option value="ema" selected>EMA</option>
         </select>
       </span>
-      <span>Cross within <input type="number" id="lookback" value="3" min="1" max="10"> bars</span>
+      <span>Cross within <input type="number" id="lookback" value="1" min="1" max="10"> bars</span>
       <span>Min score <input type="number" id="minScore" value="0" min="0" max="100"></span>
       <label class="chk" style="font-size:12px"><input type="checkbox" id="htfChk" checked> HTF filter</label>
       <span>Leverage <input type="number" id="leverage" value="15" min="1" max="125">x</span>
@@ -316,9 +316,11 @@ function analyze(kl, cfg, htfKl){
   // last kline from Binance is the still-forming candle; evaluate on CLOSED candles only
   const live=n, lastClosed=n-1;
 
-  // most recent RSI / RSI-MA cross within lookback closed bars
+  // most recent RSI / RSI-MA cross. Window is widened by one bar beyond `lookback`
+  // so the confirmation candle (the bar after the cross) can have closed even when
+  // lookback=1 — otherwise a 1-bar setting would only ever find pending crosses.
   let side=null, crossIdx=null;
-  for(let i=lastClosed; i>=Math.max(1,lastClosed-cfg.lookback+1); i--){
+  for(let i=lastClosed; i>=Math.max(1,lastClosed-cfg.lookback); i--){
     const p=i-1;
     if(rsi[p]==null||rsi[i]==null||rsiMa[p]==null||rsiMa[i]==null) continue;
     const up=rsi[p]<=rsiMa[p] && rsi[i]>rsiMa[i];
@@ -455,7 +457,7 @@ function readCfg(){
     rsiLen:+document.getElementById('rsiLen').value||14,
     maLen:+document.getElementById('maLen').value||14,
     maType:document.getElementById('maType').value,
-    lookback:+document.getElementById('lookback').value||2,
+    lookback:+document.getElementById('lookback').value||1,
     minScore:+document.getElementById('minScore').value||0,
     useHtf:document.getElementById('htfChk').checked,
     htf2:HTF_MAP[tf]||'1h',
