@@ -64,4 +64,80 @@ function detectCross(closes, openTimes, cfg) {
   };
 }
 
-module.exports = { calcRSI, sma, ema, macd, detectCross };
+// ADX with +DI/-DI (Wilder) — trend-strength filter to avoid chop.
+function adx(highs, lows, closes, period = 14) {
+  const len = closes.length;
+  const tr = new Array(len).fill(0), pDM = new Array(len).fill(0), mDM = new Array(len).fill(0);
+  for (let i = 1; i < len; i++) {
+    const up = highs[i] - highs[i - 1], dn = lows[i - 1] - lows[i];
+    pDM[i] = (up > dn && up > 0) ? up : 0;
+    mDM[i] = (dn > up && dn > 0) ? dn : 0;
+    tr[i] = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+  }
+  const plusDI = new Array(len).fill(null), minusDI = new Array(len).fill(null), dx = new Array(len).fill(null), adxA = new Array(len).fill(null);
+  if (len <= period * 2) return { plusDI, minusDI, adx: adxA };
+  let atr = 0, sp = 0, sm = 0;
+  for (let i = 1; i <= period; i++) { atr += tr[i]; sp += pDM[i]; sm += mDM[i]; }
+  for (let i = period + 1; i < len; i++) {
+    atr = atr - atr / period + tr[i];
+    sp = sp - sp / period + pDM[i];
+    sm = sm - sm / period + mDM[i];
+    const pdi = 100 * sp / atr, mdi = 100 * sm / atr;
+    plusDI[i] = pdi; minusDI[i] = mdi;
+    dx[i] = 100 * Math.abs(pdi - mdi) / ((pdi + mdi) || 1);
+  }
+  const start = period * 2;
+  let sum = 0, c = 0;
+  for (let i = period + 1; i <= start; i++) { if (dx[i] != null) { sum += dx[i]; c++; } }
+  let a = c ? sum / c : null; adxA[start] = a;
+  for (let i = start + 1; i < len; i++) { if (dx[i] != null && a != null) { a = (a * (period - 1) + dx[i]) / period; adxA[i] = a; } }
+  return { plusDI, minusDI, adx: adxA };
+}
+
+function atr(highs, lows, closes, period = 14) {
+  const len = closes.length, out = new Array(len).fill(null); if (len <= period) return out;
+  let a = 0; for (let i = 1; i <= period; i++) a += Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+  a /= period; out[period] = a;
+  for (let i = period + 1; i < len; i++) { const t = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])); a = (a * (period - 1) + t) / period; out[i] = a; }
+  return out;
+}
+
+// Higher-timeframe bias: RSI-vs-RSIMA and EMA50-vs-EMA200 combined → bull/bear/neutral
+function htfBias(closes, cfg) {
+  if (closes.length < 60) return null;
+  const r = calcRSI(closes, cfg.rsiLen);
+  const m = cfg.maType === 'ema' ? ema(r, cfg.maLen) : sma(r, cfg.maLen);
+  const e50 = ema(closes, 50), e200 = ema(closes, 200);
+  const n = closes.length - 1; let s = 0;
+  if (r[n] != null && m[n] != null) s += r[n] > m[n] ? 1 : -1;
+  if (e50[n] != null && e200[n] != null) s += e50[n] > e200[n] ? 1 : -1;
+  return s > 0 ? 'bull' : s < 0 ? 'bear' : 'neutral';
+}
+
+// Regular RSI divergence near index `end`, using pivots with window `w`.
+// Bullish: price lower-low while RSI higher-low. Bearish: the mirror.
+function rsiDivergence(highs, lows, closes, rsi, end, w = 3, look = 40) {
+  const lo = [], hi = [];
+  const from = Math.max(w, end - look);
+  for (let i = from; i <= end - w; i++) {
+    let isLow = true, isHigh = true;
+    for (let j = 1; j <= w; j++) {
+      if (!(lows[i] < lows[i - j] && lows[i] < lows[i + j])) isLow = false;
+      if (!(highs[i] > highs[i - j] && highs[i] > highs[i + j])) isHigh = false;
+    }
+    if (isLow) lo.push(i);
+    if (isHigh) hi.push(i);
+  }
+  let bull = false, bear = false;
+  if (lo.length >= 2) {
+    const a = lo[lo.length - 2], b = lo[lo.length - 1];
+    if (lows[b] < lows[a] && rsi[b] > rsi[a]) bull = true;     // price LL, RSI HL
+  }
+  if (hi.length >= 2) {
+    const a = hi[hi.length - 2], b = hi[hi.length - 1];
+    if (highs[b] > highs[a] && rsi[b] < rsi[a]) bear = true;   // price HH, RSI LH
+  }
+  return bull ? 'bull' : bear ? 'bear' : null;
+}
+
+module.exports = { calcRSI, sma, ema, macd, adx, atr, htfBias, rsiDivergence, detectCross };

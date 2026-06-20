@@ -9,8 +9,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { ema, sma, calcRSI, macd, detectCross } = require('./indicators');
+const { detectCross } = require('./indicators');
+const { analyzeCross } = require('./strategy');
 const { notify, channelsConfigured } = require('./notify');
+
+// Higher timeframe used to confirm each signal's trend (the strongest filter).
+const HTF_MAP = { '1m': '15m', '3m': '30m', '5m': '1h', '15m': '4h', '30m': '4h', '1h': '1d', '4h': '1d' };
 
 // Public market-data host. data-api.binance.vision is NOT geo-blocked, so it
 // works from cloud runners (the main api.binance.com often returns 451 there).
@@ -23,6 +27,8 @@ const cfg = {
   maType: (process.env.MA_TYPE || 'sma').toLowerCase(),
   topN: +process.env.TOP_N || 50,
   requireMacd: /^(1|true|yes)$/i.test(process.env.REQUIRE_MACD || ''),
+  minScore: process.env.MIN_SCORE != null && process.env.MIN_SCORE !== '' ? +process.env.MIN_SCORE : 58,
+  useHtf: !/^(0|false|no)$/i.test(process.env.USE_HTF || ''),
   interval: +process.env.SCAN_INTERVAL || 60,
 };
 
@@ -82,35 +88,43 @@ function fmtPrice(p) {
 }
 
 async function scanOne(symbol, tf) {
-  const kl = await getJSON(`${BASE}/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=200`);
+  const kl = await getJSON(`${BASE}/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=300`);
   if (!Array.isArray(kl) || kl.length < 60) return null;
   const closes = kl.map(k => +k[4]);
   const openTimes = kl.map(k => k[0]);
   const cross = detectCross(closes, openTimes, cfg);
   if (!cross) return null;
 
-  // MACD agreement on the same (last closed) candle
-  const m = macd(closes);
-  const c = closes.length - 2;
-  const macdAgree = m.line[c] != null && m.signal[c] != null &&
-    (cross.side === 'LONG' ? m.line[c] > m.signal[c] : m.line[c] < m.signal[c]);
+  // Only now (a cross exists) do we fetch the higher timeframe — keeps API use low.
+  const htf = HTF_MAP[tf] || '1h';
+  let klHtf = null;
+  if (cfg.useHtf) klHtf = await getJSON(`${BASE}/api/v3/klines?symbol=${symbol}&interval=${htf}&limit=300`).catch(() => null);
 
-  if (cfg.requireMacd && !macdAgree) return null;
-  return { symbol, tf, ...cross, price: closes[closes.length - 1], macdAgree };
+  const a = analyzeCross(kl, klHtf, cross.side, { ...cfg, htf });
+  if (cfg.requireMacd && !a.macdAgree) return null;
+  if (a.score < cfg.minScore) return null;            // accuracy gate
+
+  return { symbol, tf, ...cross, price: closes[closes.length - 1], ...a };
 }
 
 function buildMessage(s) {
   const base = s.symbol.replace(/USDT$/, '');
   const emoji = s.side === 'LONG' ? '🟢' : '🔴';
   const arrow = s.side === 'LONG' ? 'crossed ABOVE' : 'crossed BELOW';
-  const macd = s.macdAgree ? '✅ MACD agrees' : '⚠️ MACD not yet';
   const tv = `https://www.tradingview.com/chart/?symbol=BINANCE:${s.symbol}`;
   const when = new Date(s.candleTime).toISOString().slice(11, 16);
-  return `${emoji} <b>${s.side}</b> · <b>${base}/USDT</b> · ${s.tf}\n` +
-    `RSI ${arrow} RSI-MA\n` +
-    `RSI ${s.rsi.toFixed(1)} / MA ${s.ma.toFixed(1)} · ${macd}\n` +
-    `Price $${fmtPrice(s.price)} · candle ${when} UTC\n` +
-    `<a href="${tv}">Open chart ↗</a>`;
+  const gradeEmoji = { A: '🅰️', B: '🅱️', C: '🇨', D: '🇩' }[s.grade] || '';
+  let msg = `${emoji} <b>${s.side}</b> · <b>${base}/USDT</b> · ${s.tf}\n` +
+    `Quality <b>${s.grade}</b> ${gradeEmoji} (score ${s.score}/100)\n` +
+    `RSI ${arrow} RSI-MA · RSI ${s.rsi.toFixed(1)}/MA ${s.ma.toFixed(1)}\n` +
+    `Confirms: ${s.passed.join(', ') || 'none'}\n`;
+  if (s.divergence === (s.side === 'LONG' ? 'bull' : 'bear')) msg += `⭐ RSI ${s.divergence} divergence\n`;
+  if (s.plan) {
+    msg += `Entry $${fmtPrice(s.plan.entry)} · SL $${fmtPrice(s.plan.sl)} · ` +
+      `TP1 $${fmtPrice(s.plan.tp1)} · TP2 $${fmtPrice(s.plan.tp2)}\n`;
+  }
+  msg += `candle ${when} UTC · <a href="${tv}">Open chart ↗</a>`;
+  return msg;
 }
 
 async function runOnce() {
@@ -134,7 +148,7 @@ async function runOnce() {
         if (st.sent[key]) continue;          // already alerted for this exact cross
         st.sent[key] = Date.now();
         const ok = await notify(`${s.side} ${s.symbol} ${s.tf}`, buildMessage(s));
-        if (ok) { alerted++; console.log(`  alert ${s.side} ${s.symbol} ${s.tf} (MACD ${s.macdAgree ? 'ok' : 'no'})`); }
+        if (ok) { alerted++; console.log(`  alert ${s.side} ${s.symbol} ${s.tf} · grade ${s.grade} (${s.score}) [${s.passed.join(',')}]`); }
         await new Promise(r => setTimeout(r, 250)); // gentle pacing between pushes
       }
     }

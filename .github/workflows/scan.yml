@@ -42,5 +42,7 @@ jobs:
           TIMEFRAMES: '5m,15m'
           MA_TYPE: 'sma'
           TOP_N: '50'
+          MIN_SCORE: '58'
+          USE_HTF: 'true'
           REQUIRE_MACD: 'false'
         run: node scan.js --once

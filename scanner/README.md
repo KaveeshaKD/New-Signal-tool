@@ -86,9 +86,36 @@ TELEGRAM_BOT_TOKEN=xxx TELEGRAM_CHAT_ID=yyy node scan.js --once   # one real sca
 | `TIMEFRAMES` | `5m,15m` | Comma list of timeframes to scan |
 | `MA_TYPE` | `sma` | `sma` or `ema` — must match the web tool's RSI-MA |
 | `MA_LEN` / `RSI_LEN` | `14` / `14` | RSI-MA and RSI lengths |
-| `TOP_N` | `50` | How many top coins (by volume) to scan |
-| `REQUIRE_MACD` | `false` | `true` = only alert when MACD also agrees (fewer, cleaner) |
+| `TOP_N` | `50` | How many top coins to scan |
+| `MIN_SCORE` | `58` | **Accuracy gate** — only alert at/above this 0-100 confluence score (58≈B, 75≈A) |
+| `USE_HTF` | `true` | Confirm against the higher timeframe (5m→1h, 15m→4h) — the strongest filter |
+| `REQUIRE_MACD` | `false` | `true` = also hard-require MACD agreement |
 | `BINANCE_BASE` | `https://data-api.binance.vision` | Public market-data host (works from cloud) |
+
+### How the confluence score works (accuracy)
+
+Every raw RSI/RSI-MA cross is scored 0-100 by stacking independent confirmations.
+Only setups scoring ≥ `MIN_SCORE` push an alert, so weak/choppy crosses are filtered out.
+
+| Technique | Weight | What it confirms |
+|-----------|--------|------------------|
+| MACD line vs signal | 1.5 | momentum behind the move |
+| ADX ≥ 20 + DI direction | 1.5 | a real trend exists (filters chop) |
+| **Higher-timeframe trend** | **2** | trade with the bigger trend — biggest edge |
+| EMA50/200 stack | 1 | structural trend |
+| Price vs EMA200 | 1 | macro side |
+| Volume > 20-bar avg | 1 | participation behind the cross |
+| RSI zone (not extreme) | 1 | not chasing an exhausted move |
+| **RSI divergence** | **1.5** | price/momentum disagreement (reversal quality) |
+| Candle direction | 0.5 | cross candle closes in trade direction |
+| ATR volatility band | 0.5 | enough movement, not erratic |
+
+Grades: **A** ≥75, **B** ≥58, **C** ≥40, **D** below. Each alert includes the grade,
+score, which confirmations passed, any divergence ⭐, and an ATR-based trade plan
+(entry / stop-loss / TP1 / TP2).
+
+**Tuning:** for fewer, higher-conviction alerts set `MIN_SCORE=75` (A-only). To catch
+more (and filter yourself) set `MIN_SCORE=45`.
 
 **Dedup:** each cross is alerted once. The `state.json` file remembers what was already
 sent (persisted via GitHub Actions cache, or on disk in loop mode).
