@@ -83,4 +83,30 @@ function analyzeCross(klBase, klHtf, side, cfg) {
   };
 }
 
-module.exports = { analyzeCross };
+// Leverage trade-suitability — matches the web tool's Trade-Ready Setups.
+// With a TP set as % of margin, the needed price move is tpPct/leverage; liquidation
+// is ~100/leverage. A coin is SUITABLE when its volatility makes that TP reachable
+// while the ATR stop stays comfortably inside the liquidation price.
+function tradeEval(side, price, atrPct, score, cfg) {
+  const lev = cfg.leverage, L = side === 'LONG';
+  if (atrPct == null || !price) return null;
+  const tpMove = cfg.tpPct / lev;
+  const liqMove = Math.max(100 / lev - 0.5, 0.5);
+  const slMove = 1.5 * atrPct;
+  const sign = L ? 1 : -1;
+  const tpPrice = price * (1 + sign * tpMove / 100);
+  const slPrice = price * (1 - sign * slMove / 100);
+  const liqPrice = price * (1 - sign * liqMove / 100);
+  const estBars = tpMove / atrPct;
+  const liqBuffer = slMove > 0 ? liqMove / slMove : 99;
+  const rr = slMove > 0 ? tpMove / slMove : 0;
+  const reach = estBars <= 4, safe = liqBuffer >= 2.5;
+  const vol = atrPct >= 0.2 && atrPct <= 3, strong = score >= 58;
+  let rating, why;
+  if (reach && safe && vol && strong) { rating = 'SUITABLE'; why = 'TP reachable, stop safely inside liquidation'; }
+  else if ((reach || strong) && liqBuffer >= 1.6 && vol) { rating = 'CAUTION'; why = !strong ? 'signal a bit weak' : (!reach ? 'TP may take longer' : 'tighten risk'); }
+  else { rating = 'SKIP'; why = liqBuffer < 1.6 ? `stop too close to ${lev}x liquidation` : !vol ? (atrPct < 0.2 ? 'too quiet for TP' : `too volatile for ${lev}x`) : 'TP too far'; }
+  return { rating, why, tpMove, slMove, liqMove, tpPrice, slPrice, liqPrice, estBars, liqBuffer, rr };
+}
+
+module.exports = { analyzeCross, tradeEval };

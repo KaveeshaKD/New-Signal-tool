@@ -42,8 +42,11 @@ jobs:
           SIGNALS: 'rsi,macd'
           TIMEFRAMES: '5m,15m'
           MA_TYPE: 'sma'
-          TOP_N: '50'
+          TOP_N: '80'
           MIN_SCORE: '58'
           USE_HTF: 'true'
           REQUIRE_MACD: 'false'
+          LEVERAGE: '15'
+          TP_PCT: '15'
+          SUITABLE_ONLY: 'false'
         run: node scan.js --once

@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { detectCross, detectMacdFlip } = require('./indicators');
-const { analyzeCross } = require('./strategy');
+const { analyzeCross, tradeEval } = require('./strategy');
 const { notify, channelsConfigured } = require('./notify');
 
 // Higher timeframe used to confirm each signal's trend (the strongest filter).
@@ -26,12 +26,16 @@ const cfg = {
   rsiLen: +process.env.RSI_LEN || 14,
   maLen: +process.env.MA_LEN || 14,
   maType: (process.env.MA_TYPE || 'sma').toLowerCase(),
-  topN: +process.env.TOP_N || 50,
+  topN: +process.env.TOP_N || 80,
   requireMacd: /^(1|true|yes)$/i.test(process.env.REQUIRE_MACD || ''),
   minScore: process.env.MIN_SCORE != null && process.env.MIN_SCORE !== '' ? +process.env.MIN_SCORE : 58,
   useHtf: !/^(0|false|no)$/i.test(process.env.USE_HTF || ''),
   // which signal sources to alert on: 'rsi' (RSI/RSI-MA cross), 'macd' (histogram reversal)
   signals: (process.env.SIGNALS || 'rsi,macd').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+  // leverage trade-suitability (matches the web tool's Trade-Ready Setups)
+  leverage: +process.env.LEVERAGE || 15,
+  tpPct: +process.env.TP_PCT || 15,
+  suitableOnly: /^(1|true|yes)$/i.test(process.env.SUITABLE_ONLY || ''),
   interval: +process.env.SCAN_INTERVAL || 60,
 };
 
@@ -39,12 +43,16 @@ const STATE_FILE = path.join(__dirname, 'state.json');
 const STABLE = /^(USDC|FDUSD|TUSD|DAI|BUSD|USDP|EUR|GBP|AEUR|USDD)$/;
 const LEVERAGED = /(UP|DOWN|BULL|BEAR)USDT$/;
 
-// Same curated top-50 as the web tool, so alerts match the chart exactly.
+// Same curated top-80 as the web tool, so alerts match the chart exactly.
+// Delisted/renamed tickers are skipped automatically if Binance has no pair.
 const CURATED = ['BTC','ETH','BNB','SOL','XRP','DOGE','ADA','TRX','AVAX','LINK',
   'TON','SHIB','DOT','BCH','NEAR','LTC','MATIC','UNI','ICP','APT',
   'ETC','XLM','FIL','HBAR','ATOM','RNDR','ARB','VET','OP','INJ',
   'IMX','MKR','GRT','AAVE','SUI','RUNE','FTM','THETA','ALGO','SEI',
-  'TIA','LDO','FLOW','EGLD','SAND','AXS','GALA','MANA','SNX','PEPE']
+  'TIA','LDO','FLOW','EGLD','SAND','AXS','GALA','MANA','SNX','PEPE',
+  'WIF','JUP','ENA','ONDO','PENDLE','STX','FET','WLD','BONK','FLOKI',
+  'ORDI','DYDX','GMX','CRV','COMP','1INCH','ENJ','CHZ','APE','KAVA',
+  'BLUR','JASMY','CFX','XTZ','EOS','NEO','MINA','GMT','IOTA','SUSHI']
   .map(s => s + 'USDT');
 
 async function getJSON(url) {
@@ -112,14 +120,20 @@ async function scanSymbol(symbol, tf) {
 
   if (cross) {
     const a = analyzeCross(kl, klHtf, cross.side, { ...cfg, htf });
-    if (!(cfg.requireMacd && !a.macdAgree) && a.score >= cfg.minScore)
-      out.push({ type: 'rsi', symbol, tf, price, ...cross, ...a });
+    if (!(cfg.requireMacd && !a.macdAgree) && a.score >= cfg.minScore) {
+      const trade = tradeEval(cross.side, price, a.atrPct, a.score, cfg);
+      if (!cfg.suitableOnly || (trade && trade.rating === 'SUITABLE'))
+        out.push({ type: 'rsi', symbol, tf, price, ...cross, ...a, trade });
+    }
   }
   if (macdFlip) {
     // confirm the histogram reversal with the OTHER techniques (trend, ADX, HTF, volume…)
     const a = analyzeCross(kl, klHtf, macdFlip.side, { ...cfg, htf });
-    if (a.score >= cfg.minScore)
-      out.push({ type: 'macd', symbol, tf, price, side: macdFlip.side, bar: macdFlip.bar, flipTime: macdFlip.flipTime, ageBars: macdFlip.ageBars, ...a });
+    if (a.score >= cfg.minScore) {
+      const trade = tradeEval(macdFlip.side, price, a.atrPct, a.score, cfg);
+      if (!cfg.suitableOnly || (trade && trade.rating === 'SUITABLE'))
+        out.push({ type: 'macd', symbol, tf, price, side: macdFlip.side, bar: macdFlip.bar, flipTime: macdFlip.flipTime, ageBars: macdFlip.ageBars, ...a, trade });
+    }
   }
   return out;
 }
@@ -146,7 +160,12 @@ function buildMessage(s) {
     `${detail}\n` +
     `Confirms: ${s.passed.join(', ') || 'none'}\n`;
   if (s.divergence === (s.side === 'LONG' ? 'bull' : 'bear')) msg += `⭐ RSI ${s.divergence} divergence\n`;
-  if (s.plan) {
+  // leverage trade-suitability — the "is this tradeable for my leverage?" verdict
+  if (s.trade) {
+    const t = s.trade, badge = { SUITABLE: '✅ SUITABLE', CAUTION: '⚠️ CAUTION', SKIP: '❌ SKIP' }[t.rating];
+    msg += `🎯 Trade ${cfg.leverage}x/${cfg.tpPct}%: <b>${badge}</b> — ${t.why}\n` +
+      `Entry $${fmtPrice(s.price)} · SL $${fmtPrice(t.slPrice)} · TP $${fmtPrice(t.tpPrice)} · Liq $${fmtPrice(t.liqPrice)} · ${t.rr.toFixed(2)}R\n`;
+  } else if (s.plan) {
     msg += `Entry $${fmtPrice(s.plan.entry)} · SL $${fmtPrice(s.plan.sl)} · ` +
       `TP1 $${fmtPrice(s.plan.tp1)} · TP2 $${fmtPrice(s.plan.tp2)}\n`;
   }
@@ -176,7 +195,7 @@ async function runOnce() {
         st.sent[key] = Date.now();
         const label = s.type === 'macd' ? `MACD-FLIP ${s.side}` : `${s.side}`;
         const ok = await notify(`${label} ${s.symbol} ${s.tf}`, buildMessage(s));
-        if (ok) { alerted++; console.log(`  alert ${label} ${s.symbol} ${s.tf} · grade ${s.grade} (${s.score}) [${s.passed.join(',')}]`); }
+        if (ok) { alerted++; console.log(`  alert ${label} ${s.symbol} ${s.tf} · grade ${s.grade} (${s.score}) · trade ${s.trade ? s.trade.rating : '—'} [${s.passed.join(',')}]`); }
         await new Promise(r => setTimeout(r, 250)); // gentle pacing between pushes
       }
     }

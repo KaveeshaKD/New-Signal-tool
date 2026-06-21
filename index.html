@@ -115,7 +115,7 @@
       <button data-tf="30m">30m</button>
     </div>
     <label class="chk"><input type="checkbox" id="autoChk" checked> Auto-refresh</label>
-    <button class="btn" id="scanBtn">Scan Top 50</button>
+    <button class="btn" id="scanBtn">Scan Top 80</button>
   </div>
 </header>
 
@@ -159,7 +159,7 @@
           <th data-sort="chg">24h%</th>
           <th data-sort="age">Age</th>
         </tr></thead>
-        <tbody id="sigBody"><tr><td colspan="8" class="empty">No scan yet. Click <b>Scan Top 50</b>.</td></tr></tbody>
+        <tbody id="sigBody"><tr><td colspan="8" class="empty">No scan yet. Click <b>Scan Top 80</b>.</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -206,13 +206,18 @@
 
 <script>
 const API = 'https://api.binance.com';
-// Top 50 coins by market cap (USDT pairs on Binance). Stablecoins excluded.
-const TOP50 = ['BTC','ETH','BNB','SOL','XRP','DOGE','ADA','TRX','AVAX','LINK',
+// Top 80 coins by market cap (USDT pairs on Binance). Stablecoins excluded.
+// Delisted/renamed tickers are skipped automatically if Binance has no pair.
+const TOP_COINS = ['BTC','ETH','BNB','SOL','XRP','DOGE','ADA','TRX','AVAX','LINK',
   'TON','SHIB','DOT','BCH','NEAR','LTC','MATIC','UNI','ICP','APT',
   'ETC','XLM','FIL','HBAR','ATOM','RNDR','ARB','VET','OP','INJ',
   'IMX','MKR','GRT','AAVE','SUI','RUNE','FTM','THETA','ALGO','SEI',
-  'TIA','LDO','FLOW','EGLD','SAND','AXS','GALA','MANA','SNX','PEPE']
+  'TIA','LDO','FLOW','EGLD','SAND','AXS','GALA','MANA','SNX','PEPE',
+  'WIF','JUP','ENA','ONDO','PENDLE','STX','FET','WLD','BONK','FLOKI',
+  'ORDI','DYDX','GMX','CRV','COMP','1INCH','ENJ','CHZ','APE','KAVA',
+  'BLUR','JASMY','CFX','XTZ','EOS','NEO','MINA','GMT','IOTA','SUSHI']
   .map(s => s + 'USDT');
+const TOP50 = TOP_COINS;   // back-compat alias
 
 let state = {
   tf:'15m', rows:[], selected:null, sortKey:'score', sortDir:-1, filter:'rsi',

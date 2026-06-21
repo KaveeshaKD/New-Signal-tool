@@ -87,7 +87,9 @@ TELEGRAM_BOT_TOKEN=xxx TELEGRAM_CHAT_ID=yyy node scan.js --once   # one real sca
 | `TIMEFRAMES` | `5m,15m` | Comma list of timeframes to scan |
 | `MA_TYPE` | `sma` | `sma` or `ema` — must match the web tool's RSI-MA |
 | `MA_LEN` / `RSI_LEN` | `14` / `14` | RSI-MA and RSI lengths |
-| `TOP_N` | `50` | How many top coins to scan |
+| `TOP_N` | `80` | How many top coins to scan |
+| `LEVERAGE` / `TP_PCT` | `15` / `15` | Your leverage and take-profit (% of margin) for the trade-suitability verdict |
+| `SUITABLE_ONLY` | `false` | `true` = only push alerts that rate **✅ SUITABLE** for your leverage |
 | `MIN_SCORE` | `58` | **Accuracy gate** — only alert at/above this 0-100 confluence score (58≈B, 75≈A) |
 | `USE_HTF` | `true` | Confirm against the higher timeframe (5m→1h, 15m→4h) — the strongest filter |
 | `REQUIRE_MACD` | `false` | `true` = also hard-require MACD agreement |
