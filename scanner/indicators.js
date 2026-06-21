@@ -64,6 +64,21 @@ function detectCross(closes, openTimes, cfg) {
   };
 }
 
+// MACD histogram reversal: the first opposite-colour bar (red→green = LONG,
+// green→red = SHORT). Checks the live/forming bar first (earliest possible alert),
+// then the last closed bar. `bar` says which one flipped.
+function detectMacdFlip(closes, openTimes) {
+  const m = macd(closes);
+  const n = closes.length - 1;        // forming bar
+  for (const i of [n, n - 1]) {
+    const h0 = m.hist[i - 1], h1 = m.hist[i];
+    if (h0 == null || h1 == null) continue;
+    if (h0 <= 0 && h1 > 0) return { side: 'LONG',  bar: i === n ? 'forming' : 'closed', flipTime: openTimes[i], ageBars: n - i, hist: h1 };
+    if (h0 >= 0 && h1 < 0) return { side: 'SHORT', bar: i === n ? 'forming' : 'closed', flipTime: openTimes[i], ageBars: n - i, hist: h1 };
+  }
+  return null;
+}
+
 // ADX with +DI/-DI (Wilder) — trend-strength filter to avoid chop.
 function adx(highs, lows, closes, period = 14) {
   const len = closes.length;
@@ -140,4 +155,4 @@ function rsiDivergence(highs, lows, closes, rsi, end, w = 3, look = 40) {
   return bull ? 'bull' : bear ? 'bear' : null;
 }
 
-module.exports = { calcRSI, sma, ema, macd, adx, atr, htfBias, rsiDivergence, detectCross };
+module.exports = { calcRSI, sma, ema, macd, adx, atr, htfBias, rsiDivergence, detectCross, detectMacdFlip };

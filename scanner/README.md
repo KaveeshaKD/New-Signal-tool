@@ -83,6 +83,7 @@ TELEGRAM_BOT_TOKEN=xxx TELEGRAM_CHAT_ID=yyy node scan.js --once   # one real sca
 
 | Var | Default | Meaning |
 |-----|---------|---------|
+| `SIGNALS` | `rsi,macd` | Signal sources: `rsi` (RSI/RSI-MA cross) and/or `macd` (histogram reversal — first opposite-colour bar, detected on the forming bar) |
 | `TIMEFRAMES` | `5m,15m` | Comma list of timeframes to scan |
 | `MA_TYPE` | `sma` | `sma` or `ema` — must match the web tool's RSI-MA |
 | `MA_LEN` / `RSI_LEN` | `14` / `14` | RSI-MA and RSI lengths |

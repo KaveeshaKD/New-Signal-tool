@@ -140,7 +140,7 @@
     <div class="summary" id="summary"></div>
     <div class="filters" id="filterTabs">
       <button class="ftab active" data-f="rsi">RSI cross<small id="c-rsi">—</small></button>
-      <button class="ftab" data-f="macd">MACD cross<small id="c-macd">—</small></button>
+      <button class="ftab" data-f="macd">MACD flip<small id="c-macd">—</small></button>
       <button class="ftab" data-f="both">RSI + MACD<small id="c-both">—</small></button>
     </div>
     <div class="status">
@@ -172,6 +172,11 @@
     <div class="chart-info">
       <span class="price" id="livePrice">—</span>
       <span class="meta" id="chartMeta"></span>
+    </div>
+    <div class="legend">
+      <span><i class="swatch" style="background:#9b8cff"></i> EMA20</span>
+      <span><i class="swatch" style="background:#5a6478"></i> EMA50</span>
+      <span style="color:var(--muted)">price far above/below = extended entry</span>
     </div>
     <div id="chart"></div>
     <div class="legend">
@@ -309,7 +314,7 @@ function analyze(kl, cfg, htfKl){
         highs=kl.map(k=>+k[2]),  lows=kl.map(k=>+k[3]), vols=kl.map(k=>+k[5]);
   const rsi  = calcRSI(closes, cfg.rsiLen);
   const rsiMa= cfg.maType==='ema' ? ema(rsi, cfg.maLen) : sma(rsi, cfg.maLen);
-  const e50=ema(closes,50), e200=ema(closes,200);
+  const e9=ema(closes,9), e20=ema(closes,20), e50=ema(closes,50), e200=ema(closes,200);
   const m=macd(closes), ax=adx(highs,lows,closes,14), avgVol=sma(vols,20), atr14=atr(highs,lows,closes,14);
   const n=closes.length-1;
 
@@ -335,14 +340,23 @@ function analyze(kl, cfg, htfKl){
   const confirmOk = hasConf && (side==='LONG' ? closes[confIdx]>=opens[confIdx] : closes[confIdx]<=opens[confIdx]);
   const pending = side!=null && !hasConf;            // cross done, waiting for the candle to close
 
-  // most recent MACD line / signal cross (blue vs orange) on closed bars
-  let macdCrx=null, macdAge=null;
-  for(let i=lastClosed; i>=Math.max(1,lastClosed-cfg.lookback-2); i--){
-    const p=i-1;
-    if(m.line[p]==null||m.signal[p]==null||m.line[i]==null||m.signal[i]==null) continue;
-    if(m.line[p]<=m.signal[p]&&m.line[i]>m.signal[i]){ macdCrx='bull'; macdAge=lastClosed-i; break; }
-    if(m.line[p]>=m.signal[p]&&m.line[i]<m.signal[i]){ macdCrx='bear'; macdAge=lastClosed-i; break; }
+  // MACD histogram color flip (red→green = bull, green→red = bear). Detected on the
+  // FIRST signal bar — INCLUDING the live/forming bar (index `live`) — so the entry
+  // triggers the moment the histogram crosses, not a bar later. macdAge is counted from
+  // the forming bar: 0 = flipping on the current (building) bar, 1 = last closed bar.
+  let macdCrx=null, macdAge=null, macdFlipIdx=null;
+  for(let i=live; i>=Math.max(1,live-cfg.lookback-2); i--){
+    const h0=m.hist[i-1], h1=m.hist[i];
+    if(h0==null||h1==null) continue;
+    if(h0<=0 && h1>0){ macdCrx='bull'; macdAge=live-i; macdFlipIdx=i; break; }   // red → green
+    if(h0>=0 && h1<0){ macdCrx='bear'; macdAge=live-i; macdFlipIdx=i; break; }   // green → red
   }
+  const macdFresh = macdAge!=null && macdAge<=1;     // flip on the forming or just-closed bar = entry bar
+  // histogram momentum on the live bar: current colour + whether the bars are GROWING
+  // (a growing green run = strengthening long; growing red run = strengthening short)
+  const hNow=m.hist[live], hPrev=m.hist[live-1];
+  const macdHistDir = hNow==null ? null : (hNow>0?'green':'red');
+  const macdGrowing = hNow!=null && hPrev!=null && (hNow>0)===(hPrev>0) && Math.abs(hNow)>Math.abs(hPrev);
 
   const c=lastClosed;                                 // evaluate confirmations on the last closed bar
   const cur=rsi[live], prev=rsi[live-1];
@@ -350,14 +364,34 @@ function analyze(kl, cfg, htfKl){
   const checks=[];
   const add=(name,pass,w,detail)=>checks.push({name,pass:!!pass,w,detail:detail||''});
 
+  // ---- entry-timing & quality metrics (computed even when no side, guarded below) ----
+  let entryTiming=null, entryNote='', entryZone=null, extAtr=0, moveAtr=0, sep=0, whip=0;
+  if(side){
+    const L0 = side==='LONG', sign=L0?1:-1;
+    const aE = atr14[c] || atr14[n] || closes[c]*0.005;
+    const crossPrice = closes[crossIdx];
+    extAtr  = aE ? sign*(closes[c]-e9[c])/aE : 0;        // distance above/below fast EMA (ATR units)
+    moveAtr = aE ? sign*(closes[c]-crossPrice)/aE : 0;   // how far price ran since the cross
+    sep     = Math.abs(rsi[c]-rsiMa[c]);                 // how decisively RSI left its MA
+    // recent whipsaw: count RSI/RSI-MA crosses in the last 12 closed bars (chop detector)
+    for(let i=Math.max(1,c-12); i<=c; i++){
+      if(rsi[i-1]==null||rsiMa[i-1]==null||rsi[i]==null||rsiMa[i]==null) continue;
+      if((rsi[i-1]<=rsiMa[i-1])!==(rsi[i]<=rsiMa[i])) whip++;
+    }
+    if(extAtr<=0.9 && moveAtr<=1.3){ entryTiming='FRESH'; entryNote='good spot — entry near the cross'; }
+    else if(extAtr<=1.8 && moveAtr<=2.3){ entryTiming='OK'; entryNote='acceptable — slightly into the move'; }
+    else { entryTiming='EXTENDED'; entryNote='price already ran — wait for a pullback'; }
+    entryZone = e9[c];                                    // ideal re-entry: pullback toward fast EMA
+  }
+
   if(side){
     const L = side==='LONG';
     // 1) Confirmation candle after the RSI cross (your core rule)
     add('Confirm candle', confirmOk, 2, pending?'awaiting close':(confirmOk?('closed '+(L?'green':'red')):'candle opposed'));
-    // 2) MACD line / signal cross in the trade direction (blue & orange cross)
-    add('MACD cross', macdCrx===(L?'bull':'bear'), 1.5, macdCrx?(macdCrx+' cross · '+macdAge+'b ago'):'no recent cross');
-    // 3) MACD position (line on the correct side of signal)
-    add('MACD position', m.line[c]!=null&&m.signal[c]!=null&&(L?m.line[c]>m.signal[c]:m.line[c]<m.signal[c]), 1, m.hist[c]!=null?'hist '+m.hist[c].toFixed(4):'n/a');
+    // 2) MACD histogram flip (red→green = long, green→red = short)
+    add('MACD flip', macdCrx===(L?'bull':'bear'), 1.5, macdCrx?(macdCrx==='bull'?'red→green':'green→red')+' · '+(macdAge===0?'this bar':macdAge+'b ago'):'no recent flip');
+    // 3) MACD histogram growing — bars getting bigger in the trade colour (momentum building)
+    add('MACD histogram', macdHistDir===(L?'green':'red') && macdGrowing, 1, macdHistDir?(macdHistDir+(macdGrowing?' ↑ growing':' flat/fading')):'n/a');
     // 4) RSI momentum (direction of the RSI line itself)
     add('RSI momentum', L?rsi[c]>rsi[c-1]:rsi[c]<rsi[c-1], 1, 'RSI '+(rsi[c]>rsi[c-1]?'rising':'falling'));
     // 5) ADX trend strength + directional movement (filters chop)
@@ -374,6 +408,13 @@ function analyze(kl, cfg, htfKl){
     add('RSI zone room', L?(rsi[c]<68):(rsi[c]>32), 1, 'RSI '+(rsi[c]?.toFixed(0)??'—'));
     // 10) Volume surge vs 20-bar average
     add('Volume surge', avgVol[c]!=null&&vols[c]>avgVol[c], 1, '');
+    // 11) Cross strength — RSI must pull away from its MA with real momentum (not a flat touch)
+    const slopeDir = (L?1:-1)*(rsi[c]-rsi[Math.max(0,c-2)]);
+    add('Cross strength', sep>=1.2 && slopeDir>=1.5, 1, 'sep '+sep.toFixed(1)+' · slope '+slopeDir.toFixed(1));
+    // 12) Clean structure — few recent crosses (avoid chop / whipsaw zones)
+    add('Clean structure', whip<=2, 1, whip+' crosses/12b');
+    // 13) Fresh entry — not chasing a move that already extended away from the fast EMA
+    add('Fresh entry', entryTiming!=='EXTENDED', 1, (entryTiming||'').toLowerCase()+' · '+extAtr.toFixed(1)+'atr');
   }
 
   const totW=checks.reduce((s,c)=>s+c.w,0);
@@ -382,9 +423,10 @@ function analyze(kl, cfg, htfKl){
   const grade = score>=75?'A':score>=58?'B':score>=40?'C':'D';
   const a14=atr14[n];
 
-  return { closes, rsi, rsiMa, macd:m, adxR:ax, e50, e200,
-           side, age, crossIdx, confIdx, pending, confirmOk, macdCrx, macdAge, bias, checks, score, grade,
+  return { closes, rsi, rsiMa, macd:m, adxR:ax, e9, e20, e50, e200,
+           side, age, crossIdx, confIdx, pending, confirmOk, macdCrx, macdAge, macdFresh, macdFlipIdx, macdHistDir, macdGrowing, bias, checks, score, grade,
            status: side ? (pending?'PENDING':'READY') : null,
+           entryTiming, entryNote, entryZone, extAtr, moveAtr,
            confirms:checks.filter(c=>c.pass).map(c=>c.name),
            rsiNow:cur, maNow:rsiMa[n], price:closes[n],
            atr:a14, atrPct:a14!=null?100*a14/closes[n]:null,
@@ -428,8 +470,9 @@ async function scan(){
           side:a.side, score:a.score, grade:a.grade, confirms:a.confirms, age:a.age,
           status:a.status, pending:a.pending,
           rsiConfirmed: !!(a.side && !a.pending && a.confirmOk),
-          macdCrx:a.macdCrx, macdAge:a.macdAge,
+          macdCrx:a.macdCrx, macdAge:a.macdAge, macdFresh:a.macdFresh, macdHistDir:a.macdHistDir, macdGrowing:a.macdGrowing,
           macdSide: a.macdCrx==='bull'?'LONG':a.macdCrx==='bear'?'SHORT':null,
+          entryTiming:a.entryTiming, entryZone:a.entryZone, extAtr:a.extAtr,
           rsi:a.rsiNow, ma:a.maNow, bias:a.bias, atrPct:a.atrPct,
           price:(tick[sym]?.price)??a.price,
           chg:tick[sym]?.chg??0, _a:a
@@ -496,7 +539,12 @@ function tradeEval(r, cfg){
     why = liqBuffer<1.6 ? 'Stop too close to liquidation for '+lev+'x — risky.'
         : !vol ? (r.atrPct<0.2?'Too quiet — TP may not trigger.':'Too volatile for '+lev+'x.')
         : estBars>4 ? 'TP likely too far to hit soon.' : 'Low confluence.'; }
-  return {tpMove,liqMove,slMove,tpPrice,slPrice,liqPrice,estBars,liqBuffer,rr,rating,why};
+  // entry-timing override: a great signal at a chased price is still a poor entry
+  if(r.entryTiming==='EXTENDED'){
+    rating = rating==='good' ? 'caut' : 'bad';
+    why = 'Price already extended — wait for a pullback'+(r.entryZone?' toward '+fmtPrice(r.entryZone):'')+'.';
+  }
+  return {tpMove,liqMove,slMove,tpPrice,slPrice,liqPrice,estBars,liqBuffer,rr,rating,why,entryTiming:r.entryTiming};
 }
 
 /* ---------- rendering ---------- */
@@ -560,12 +608,15 @@ function render(){
     const sel=r.symbol===state.selected?'sel':'';
     const sd=r.dispSide;
     // score cell: RSI-quality grade when an RSI signal exists, else a MACD chip
+    const histChip = (r.macdHistDir==='green'?'🟢':'🔴')+(r.macdGrowing?'↑':'·');
     const scoreCell = r.rsiConfirmed
       ? `<span class="grade g${r.grade}" title="${r.confirms.join(', ')||'none'}">${r.score} ${r.grade}</span>`
-      : `<span class="grade g${sd==='LONG'?'A':'D'}" style="min-width:auto" title="MACD ${r.macdCrx} cross">MACD ${sd==='LONG'?'▲':'▼'}</span>`;
-    const ageTxt = f==='macd'
-      ? (r.macdAge===0?'this candle':r.macdAge+' bar'+(r.macdAge>1?'s':'')+' ago')
+      : `<span class="grade g${sd==='LONG'?'A':'D'}" style="min-width:auto" title="MACD ${r.macdCrx} flip (${r.macdHistDir}${r.macdGrowing?' growing':''})">${histChip} ${sd==='LONG'?'▲':'▼'}</span>`;
+    const ageBase = f==='macd'
+      ? (r.macdAge===0?'⚡ flipping now':r.macdAge===1?'flipped last bar':r.macdAge+' bars ago')
       : (r.age===0?'just confirmed':r.age+' bar'+(r.age>1?'s':'')+' ago');
+    const eDot = r.entryTiming ? ({FRESH:'🟢',OK:'🟡',EXTENDED:'🔴'}[r.entryTiming]+' ') : '';
+    const ageTxt = eDot+ageBase;
     return `<tr class="${sel}" data-sym="${r.symbol}">
       <td class="sym">${r.base}<span style="color:var(--muted)">/USDT</span></td>
       <td><span class="tag ${sd.toLowerCase()}">${sd==='LONG'?'▲ LONG':'▼ SHORT'}</span></td>
@@ -607,6 +658,7 @@ function renderTradeSetups(){
       <div class="row"><span>ATR stop-loss</span><b class="neg">${fmtPrice(t.slPrice)} · ${t.slMove.toFixed(2)}%</b></div>
       <div class="row"><span>Liquidation (${cfg.leverage}x)</span><b>${fmtPrice(t.liqPrice)} · ${t.liqMove.toFixed(1)}%</b></div>
       <div class="row"><span>~candles to TP · R:R</span><b>${t.estBars.toFixed(1)} · ${t.rr.toFixed(2)}:1</b></div>
+      <div class="row"><span>Entry timing</span><b>${t.entryTiming?({FRESH:'🟢 Fresh',OK:'🟡 OK',EXTENDED:'🔴 Extended'}[t.entryTiming]):'—'}</b></div>
       <div class="note">${t.why}</div>
     </div>`).join('');
   el.querySelectorAll('.setup').forEach(d=>d.onclick=()=>selectCoin(d.dataset.sym));
@@ -632,6 +684,9 @@ function initCharts(){
   state.candle=state.chart.addCandlestickSeries({upColor:'#16c784',downColor:'#ea3943',borderVisible:false,wickUpColor:'#16c784',wickDownColor:'#ea3943'});
   state.vol=state.chart.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'',color:'#2a3447'});
   state.vol.priceScale().applyOptions({scaleMargins:{top:0.82,bottom:0}});
+  // EMA reference lines for entry context (price far above = extended/chasing)
+  state.ema20=state.chart.addLineSeries({color:'#9b8cff',lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+  state.ema50=state.chart.addLineSeries({color:'#5a6478',lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
 
   state.rsiChart=LightweightCharts.createChart(document.getElementById('rsiChart'),{...opts,rightPriceScale:{borderColor:'#222c3d'}});
   state.rsiSeries=state.rsiChart.addLineSeries({color:'#4c8dff',lineWidth:2});
@@ -675,29 +730,53 @@ async function selectCoin(symbol){
   state.candle.setData(kl.map(k=>({time:Math.floor(k[0]/1000),open:+k[1],high:+k[2],low:+k[3],close:+k[4]})));
   state.vol.setData(kl.map(k=>({time:Math.floor(k[0]/1000),value:+k[5],color:(+k[4]>=+k[1])?'rgba(22,199,132,.4)':'rgba(234,57,67,.4)'})));
   const t=a.times;
+  state.ema20.setData(t.map((tt,i)=>a.e20[i]!=null?{time:tt,value:a.e20[i]}:null).filter(Boolean));
+  state.ema50.setData(t.map((tt,i)=>a.e50[i]!=null?{time:tt,value:a.e50[i]}:null).filter(Boolean));
   state.rsiSeries.setData(t.map((tt,i)=>a.rsi[i]!=null?{time:tt,value:a.rsi[i]}:null).filter(Boolean));
   state.maSeries.setData(t.map((tt,i)=>a.rsiMa[i]!=null?{time:tt,value:a.rsiMa[i]}:null).filter(Boolean));
   [30,50,70].forEach(lv=>state['lvl'+lv].setData(t.map(tt=>({time:tt,value:lv}))));
 
-  // MACD pane
+  // MACD pane — highlight the flip bar (where red↔green) brighter than the rest
   const m=a.macd;
-  state.macdHist.setData(t.map((tt,i)=>m.hist[i]!=null?{time:tt,value:m.hist[i],
-    color:m.hist[i]>=0?'rgba(22,199,132,.6)':'rgba(234,57,67,.6)'}:null).filter(Boolean));
+  state.macdHist.setData(t.map((tt,i)=>{
+    if(m.hist[i]==null) return null;
+    const up=m.hist[i]>=0, isFlip=(i===a.macdFlipIdx);
+    const color = isFlip ? (up?'#26ffa0':'#ff5d68')                 // bright highlight on the flip bar
+                         : (up?'rgba(22,199,132,.55)':'rgba(234,57,67,.55)');
+    return {time:tt,value:m.hist[i],color};
+  }).filter(Boolean));
   state.macdLine.setData(t.map((tt,i)=>m.line[i]!=null?{time:tt,value:m.line[i]}:null).filter(Boolean));
   state.macdSig.setData(t.map((tt,i)=>m.signal[i]!=null?{time:tt,value:m.signal[i]}:null).filter(Boolean));
   state.macdZero.setData(t.map(tt=>({time:tt,value:0})));
+  // arrow pointing at the histogram flip — the entry point you circled
+  if(a.macdCrx!=null && a.macdFlipIdx!=null && t[a.macdFlipIdx]!=null){
+    const bull=a.macdCrx==='bull';
+    state.macdHist.setMarkers([{
+      time:t[a.macdFlipIdx], position:bull?'belowBar':'aboveBar',
+      color:bull?'#16c784':'#ea3943', shape:bull?'arrowUp':'arrowDown',
+      text:(bull?'LONG':'SHORT')+(a.macdFresh?' ⚡':'')+' flip'
+    }]);
+  } else state.macdHist.setMarkers([]);
 
-  // mark the RSI cross + the confirmation candle on the price chart
+  // markers: RSI cross + confirmation candle, plus the MACD-flip entry bar
+  const mk=[];
   if(a.crossIdx!=null){
     const L=a.side==='LONG', col=L?'#16c784':'#ea3943';
-    const mk=[{time:t[a.crossIdx],position:L?'belowBar':'aboveBar',color:'#7b88a1',
-               shape:L?'arrowUp':'arrowDown',text:'cross'}];
+    mk.push({time:t[a.crossIdx],position:L?'belowBar':'aboveBar',color:'#7b88a1',
+             shape:L?'arrowUp':'arrowDown',text:'cross'});
     if(a.confIdx!=null && t[a.confIdx]!=null && !a.pending){
       mk.push({time:t[a.confIdx],position:L?'belowBar':'aboveBar',color:col,
                shape:L?'arrowUp':'arrowDown',text:a.side+(a.confirmOk?' ✓':' ✗')});
     }
-    state.candle.setMarkers(mk);
-  } else state.candle.setMarkers([]);
+  }
+  if(a.macdCrx!=null && a.macdFlipIdx!=null && t[a.macdFlipIdx]!=null){
+    const bull=a.macdCrx==='bull';
+    mk.push({time:t[a.macdFlipIdx],position:bull?'belowBar':'aboveBar',
+             color:bull?'#16c784':'#ea3943',shape:'circle',
+             text:'MACD flip'+(a.macdFresh?' ⚡':'')});
+  }
+  mk.sort((x,y)=>x.time-y.time);
+  state.candle.setMarkers(mk);
 
   state.chart.timeScale().fitContent();
   updateChartInfo(symbol, a);
@@ -718,6 +797,14 @@ function updateChartInfo(symbol, a){
   // confirmation breakdown panel + trade plan
   const bd=document.getElementById('breakdown');
   if(a.side && a.checks.length){
+    let entry='';
+    if(a.entryTiming){
+      const col={FRESH:'var(--green)',OK:'var(--amber)',EXTENDED:'var(--red)'}[a.entryTiming];
+      const dot={FRESH:'🟢',OK:'🟡',EXTENDED:'🔴'}[a.entryTiming];
+      const pull = a.entryTiming==='EXTENDED' && a.entryZone ? ` → ideal pullback near <b>${fmtPrice(a.entryZone)}</b>` : '';
+      entry=`<div class="plan" style="border-left:3px solid ${col}"><b>Entry timing: ${dot} ${a.entryTiming}</b> — ${a.entryNote}${pull}<br>
+        <span class="muted">price is ${a.extAtr.toFixed(1)} ATR from EMA9 · ran ${a.moveAtr.toFixed(1)} ATR since the cross</span></div>`;
+    }
     let plan='';
     if(a.atr!=null){
       const L=a.side==='LONG', e=a.price;
@@ -730,11 +817,14 @@ function updateChartInfo(symbol, a){
     }
     bd.innerHTML='<div class="chk-grid">'+a.checks.map(c=>
       `<span class="chk-item ${c.pass?'ok':'no'}">${c.pass?'✓':'✗'} ${c.name}${c.detail?` <em>${c.detail}</em>`:''}</span>`
-    ).join('')+'</div>'+plan;
+    ).join('')+'</div>'+entry+plan;
   } else if(a.macdCrx){
     const ms=a.macdCrx==='bull'?'LONG':'SHORT';
-    bd.innerHTML=`<span class="chk-item ok">✓ MACD ${a.macdCrx} cross <em>${a.macdAge}b ago → ${ms} bias</em></span>
-      <span class="muted" style="display:block;margin-top:6px">No RSI / RSI-MA cross yet — MACD-only signal. Wait for the RSI cross + confirmation candle for a full setup.</span>`;
+    const flip=a.macdCrx==='bull'?'red → green':'green → red';
+    const mom=a.macdHistDir?` · histogram ${a.macdHistDir}${a.macdGrowing?' and growing 📈':' (flat/fading)'}`:'';
+    bd.innerHTML=`<span class="chk-item ok">✓ MACD histogram flip <em>${flip} · ${a.macdAge}b ago → ${ms}</em></span>
+      <span class="chk-item ${a.macdGrowing?'ok':'no'}" style="display:block;margin-top:4px">${a.macdGrowing?'✓':'✗'} Momentum${mom}</span>
+      <span class="muted" style="display:block;margin-top:6px">MACD-flip signal (no RSI cross yet). Strongest when the new-colour bars keep growing. Add the RSI cross + confirmation candle for a full A-grade setup.</span>`;
   } else {
     bd.innerHTML='<span class="muted">No active RSI / RSI-MA or MACD crossover on this coin right now.</span>';
   }
@@ -769,6 +859,9 @@ document.getElementById('scanBtn').onclick=()=>scan();
 document.querySelectorAll('.ftab').forEach(b=>{
   b.onclick=()=>{
     state.filter=b.dataset.f;
+    // MACD flip tab: show freshest flips first (entry bar at top); others by score
+    if(b.dataset.f==='macd'){ state.sortKey='age'; state.sortDir=1; }
+    else { state.sortKey='score'; state.sortDir=-1; }
     document.querySelectorAll('.ftab').forEach(x=>x.classList.toggle('active',x===b));
     render();
   };

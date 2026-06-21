@@ -39,6 +39,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          SIGNALS: 'rsi,macd'
           TIMEFRAMES: '5m,15m'
           MA_TYPE: 'sma'
           TOP_N: '50'

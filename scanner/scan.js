@@ -1,5 +1,6 @@
-// Cloud scanner: polls Binance for the top coins, detects RSI / RSI-MA crosses
-// on the configured timeframes (default 5m + 15m), and pushes a phone alert.
+// Cloud scanner: polls Binance for the top coins, detects RSI / RSI-MA crosses AND
+// MACD histogram reversals (first opposite-colour bar) on the configured timeframes
+// (default 5m + 15m), confirms each with the confluence engine, and pushes a phone alert.
 //
 //   node scan.js --once     run a single pass (used by GitHub Actions cron)
 //   node scan.js --loop     run forever, every SCAN_INTERVAL seconds (VPS/PC)
@@ -9,7 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { detectCross } = require('./indicators');
+const { detectCross, detectMacdFlip } = require('./indicators');
 const { analyzeCross } = require('./strategy');
 const { notify, channelsConfigured } = require('./notify');
 
@@ -29,6 +30,8 @@ const cfg = {
   requireMacd: /^(1|true|yes)$/i.test(process.env.REQUIRE_MACD || ''),
   minScore: process.env.MIN_SCORE != null && process.env.MIN_SCORE !== '' ? +process.env.MIN_SCORE : 58,
   useHtf: !/^(0|false|no)$/i.test(process.env.USE_HTF || ''),
+  // which signal sources to alert on: 'rsi' (RSI/RSI-MA cross), 'macd' (histogram reversal)
+  signals: (process.env.SIGNALS || 'rsi,macd').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
   interval: +process.env.SCAN_INTERVAL || 60,
 };
 
@@ -87,50 +90,74 @@ function fmtPrice(p) {
   return p.toFixed(8);
 }
 
-async function scanOne(symbol, tf) {
+// Scan one symbol/timeframe for ALL enabled signal sources off a single fetch.
+// Each candidate is confirmed by the confluence engine and gated by MIN_SCORE.
+async function scanSymbol(symbol, tf) {
   const kl = await getJSON(`${BASE}/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=300`);
-  if (!Array.isArray(kl) || kl.length < 60) return null;
+  if (!Array.isArray(kl) || kl.length < 60) return [];
   const closes = kl.map(k => +k[4]);
   const openTimes = kl.map(k => k[0]);
-  const cross = detectCross(closes, openTimes, cfg);
-  if (!cross) return null;
 
-  // Only now (a cross exists) do we fetch the higher timeframe — keeps API use low.
+  const cross    = cfg.signals.includes('rsi')  ? detectCross(closes, openTimes, cfg)   : null;
+  const macdFlip = cfg.signals.includes('macd') ? detectMacdFlip(closes, openTimes)     : null;
+  if (!cross && !macdFlip) return [];
+
+  // a candidate exists — fetch the higher timeframe once for confirmation
   const htf = HTF_MAP[tf] || '1h';
   let klHtf = null;
   if (cfg.useHtf) klHtf = await getJSON(`${BASE}/api/v3/klines?symbol=${symbol}&interval=${htf}&limit=300`).catch(() => null);
 
-  const a = analyzeCross(kl, klHtf, cross.side, { ...cfg, htf });
-  if (cfg.requireMacd && !a.macdAgree) return null;
-  if (a.score < cfg.minScore) return null;            // accuracy gate
+  const price = closes[closes.length - 1];
+  const out = [];
 
-  return { symbol, tf, ...cross, price: closes[closes.length - 1], ...a };
+  if (cross) {
+    const a = analyzeCross(kl, klHtf, cross.side, { ...cfg, htf });
+    if (!(cfg.requireMacd && !a.macdAgree) && a.score >= cfg.minScore)
+      out.push({ type: 'rsi', symbol, tf, price, ...cross, ...a });
+  }
+  if (macdFlip) {
+    // confirm the histogram reversal with the OTHER techniques (trend, ADX, HTF, volume…)
+    const a = analyzeCross(kl, klHtf, macdFlip.side, { ...cfg, htf });
+    if (a.score >= cfg.minScore)
+      out.push({ type: 'macd', symbol, tf, price, side: macdFlip.side, bar: macdFlip.bar, flipTime: macdFlip.flipTime, ageBars: macdFlip.ageBars, ...a });
+  }
+  return out;
 }
 
 function buildMessage(s) {
   const base = s.symbol.replace(/USDT$/, '');
   const emoji = s.side === 'LONG' ? '🟢' : '🔴';
-  const arrow = s.side === 'LONG' ? 'crossed ABOVE' : 'crossed BELOW';
   const tv = `https://www.tradingview.com/chart/?symbol=BINANCE:${s.symbol}`;
-  const when = new Date(s.candleTime).toISOString().slice(11, 16);
   const gradeEmoji = { A: '🅰️', B: '🅱️', C: '🇨', D: '🇩' }[s.grade] || '';
-  let msg = `${emoji} <b>${s.side}</b> · <b>${base}/USDT</b> · ${s.tf}\n` +
-    `Quality <b>${s.grade}</b> ${gradeEmoji} (score ${s.score}/100)\n` +
-    `RSI ${arrow} RSI-MA · RSI ${s.rsi.toFixed(1)}/MA ${s.ma.toFixed(1)}\n` +
+  let head, detail, when;
+  if (s.type === 'macd') {
+    const flip = s.side === 'LONG' ? 'red → green' : 'green → red';
+    head = `${emoji} <b>MACD FLIP → ${s.side}</b> · <b>${base}/USDT</b> · ${s.tf}`;
+    detail = `Histogram ${flip} — first reverse bar${s.bar === 'forming' ? ' (forming NOW ⚡)' : ' (just closed)'}`;
+    when = new Date(s.flipTime).toISOString().slice(11, 16);
+  } else {
+    const arrow = s.side === 'LONG' ? 'crossed ABOVE' : 'crossed BELOW';
+    head = `${emoji} <b>${s.side}</b> · <b>${base}/USDT</b> · ${s.tf}`;
+    detail = `RSI ${arrow} RSI-MA · RSI ${s.rsi.toFixed(1)}/MA ${s.ma.toFixed(1)}`;
+    when = new Date(s.candleTime).toISOString().slice(11, 16);
+  }
+  let msg = `${head}\n` +
+    `Confirmed: Quality <b>${s.grade}</b> ${gradeEmoji} (score ${s.score}/100)\n` +
+    `${detail}\n` +
     `Confirms: ${s.passed.join(', ') || 'none'}\n`;
   if (s.divergence === (s.side === 'LONG' ? 'bull' : 'bear')) msg += `⭐ RSI ${s.divergence} divergence\n`;
   if (s.plan) {
     msg += `Entry $${fmtPrice(s.plan.entry)} · SL $${fmtPrice(s.plan.sl)} · ` +
       `TP1 $${fmtPrice(s.plan.tp1)} · TP2 $${fmtPrice(s.plan.tp2)}\n`;
   }
-  msg += `candle ${when} UTC · <a href="${tv}">Open chart ↗</a>`;
+  msg += `${when} UTC · <a href="${tv}">Open chart ↗</a>`;
   return msg;
 }
 
 async function runOnce() {
   const channels = channelsConfigured();
   if (!channels.length) { console.error('No notification channel configured. See README.md'); process.exit(1); }
-  console.log(`[${new Date().toISOString()}] scanning · TFs ${cfg.timeframes.join('+')} · push → ${channels.join(', ')}`);
+  console.log(`[${new Date().toISOString()}] scanning · TFs ${cfg.timeframes.join('+')} · signals ${cfg.signals.join('+')} · push → ${channels.join(', ')}`);
 
   const symbols = await getSymbols();
   const st = loadState();
@@ -140,21 +167,22 @@ async function runOnce() {
     // small batches to stay polite to the API
     for (let i = 0; i < symbols.length; i += 10) {
       const batch = symbols.slice(i, i + 10);
-      const results = await Promise.all(batch.map(sym => scanOne(sym, tf).catch(() => null)));
-      for (const s of results) {
-        if (!s) continue;
+      const results = await Promise.all(batch.map(sym => scanSymbol(sym, tf).catch(() => [])));
+      for (const s of results.flat()) {
         found++;
-        const key = `${s.symbol}|${s.tf}|${s.candleTime}|${s.side}`;
-        if (st.sent[key]) continue;          // already alerted for this exact cross
+        const evTime = s.type === 'macd' ? s.flipTime : s.candleTime;
+        const key = `${s.symbol}|${s.tf}|${s.type}|${evTime}|${s.side}`;
+        if (st.sent[key]) continue;          // already alerted for this exact event
         st.sent[key] = Date.now();
-        const ok = await notify(`${s.side} ${s.symbol} ${s.tf}`, buildMessage(s));
-        if (ok) { alerted++; console.log(`  alert ${s.side} ${s.symbol} ${s.tf} · grade ${s.grade} (${s.score}) [${s.passed.join(',')}]`); }
+        const label = s.type === 'macd' ? `MACD-FLIP ${s.side}` : `${s.side}`;
+        const ok = await notify(`${label} ${s.symbol} ${s.tf}`, buildMessage(s));
+        if (ok) { alerted++; console.log(`  alert ${label} ${s.symbol} ${s.tf} · grade ${s.grade} (${s.score}) [${s.passed.join(',')}]`); }
         await new Promise(r => setTimeout(r, 250)); // gentle pacing between pushes
       }
     }
   }
   saveState(st);
-  console.log(`done · ${found} fresh cross(es), ${alerted} new alert(s) sent`);
+  console.log(`done · ${found} confirmed signal(s), ${alerted} new alert(s) sent`);
 }
 
 async function main() {
