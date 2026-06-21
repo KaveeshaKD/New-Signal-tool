@@ -65,6 +65,13 @@
   .muted{color:var(--muted)}
   .plan{margin-top:12px;padding:10px 12px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;font-size:12.5px;line-height:1.7}
   .plan b{font-weight:700}
+  .bt-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:640px){.bt-grid{grid-template-columns:1fr}}
+  .bt{border:1px solid var(--border);border-radius:10px;padding:11px 13px;background:var(--panel2)}
+  .bt.sgood{border-left:3px solid var(--green)} .bt.scaut{border-left:3px solid var(--amber)} .bt.sbad{border-left:3px solid var(--red)}
+  .bt .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;font-size:13px}
+  .bt .row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+  .bt .note{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.5}
   #tradeCard{margin-top:16px}
   .setups{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;padding:14px}
   .setup{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel2);position:relative;cursor:pointer;transition:.12s}
@@ -113,6 +120,8 @@
       <button data-tf="5m">5m</button>
       <button data-tf="15m" class="active">15m</button>
       <button data-tf="30m">30m</button>
+      <button data-tf="1h">1h</button>
+      <button data-tf="4h">4h</button>
     </div>
     <label class="chk"><input type="checkbox" id="autoChk" checked> Auto-refresh</label>
     <button class="btn" id="scanBtn">Scan Top 80</button>
@@ -193,6 +202,8 @@
     <div id="macdChart"></div>
     <div class="card-h" style="border-top:1px solid var(--border)">Confirmation breakdown</div>
     <div id="breakdown" style="padding:12px 15px"><span class="muted">Select a coin to see its confirmation checklist.</span></div>
+    <div class="card-h" style="border-top:1px solid var(--border)">📊 Strategy backtest <span class="pill">does this actually make money?</span></div>
+    <div id="backtest" style="padding:12px 15px"><span class="muted">Select a coin to backtest this method on its history.</span></div>
   </div>
 </div>
 
@@ -438,6 +449,53 @@ function analyze(kl, cfg, htfKl){
            times: kl.map(k=>Math.floor(k[0]/1000)) };
 }
 
+/* ---------- backtest engine ----------
+   Replays the EXACT method (RSI cross + confirmation candle) over history,
+   exits at the leverage TP or the 1.5×ATR stop, subtracts round-trip fees, and
+   reports the only numbers that decide profitability: win rate, profit factor,
+   and EXPECTANCY (avg net price-% per trade). Leverage only scales the result —
+   it never changes the sign, so a negative expectancy loses at ANY leverage. */
+const FEE_PCT = 0.10;   // round-trip taker fee in price % (Binance futures ≈ 0.04%×2 + slippage)
+function backtest(kl, cfg, trendFilter){
+  const o=kl.map(k=>+k[1]),h=kl.map(k=>+k[2]),lw=kl.map(k=>+k[3]),c=kl.map(k=>+k[4]);
+  const rsi=calcRSI(c,cfg.rsiLen);
+  const ma=cfg.maType==='ema'?ema(rsi,cfg.maLen):sma(rsi,cfg.maLen);
+  const e200=ema(c,200), atr14=atr(h,lw,c,14);
+  const tpMove=cfg.tpPct/cfg.leverage;            // price % needed to hit TP
+  const trades=[]; const len=c.length; let i=210;
+  while(i<len-1){
+    const cu=i-1,p=i-2;
+    if(rsi[p]==null||ma[p]==null||rsi[cu]==null||ma[cu]==null){i++;continue;}
+    const up=rsi[p]<=ma[p]&&rsi[cu]>ma[cu], down=rsi[p]>=ma[p]&&rsi[cu]<ma[cu];
+    const side=up?'LONG':down?'SHORT':null;
+    if(!side){i++;continue;}
+    const L=side==='LONG';
+    if(!(L? c[i]>=o[i] : c[i]<=o[i])){i++;continue;}                 // confirmation candle
+    if(trendFilter && e200[i]!=null && !(L? c[i]>e200[i] : c[i]<e200[i])){i++;continue;}
+    const a=atr14[i]; if(a==null||a<=0){i++;continue;}
+    const entry=c[i], slMove=1.5*100*a/entry;
+    const tpP=entry*(1+(L?1:-1)*tpMove/100), slP=entry*(1-(L?1:-1)*slMove/100);
+    let res=null,ex=null;
+    for(let j=i+1;j<Math.min(len,i+300);j++){                        // walk forward; SL checked first (conservative)
+      if(L){ if(lw[j]<=slP){res='loss';ex=j;break;} if(h[j]>=tpP){res='win';ex=j;break;} }
+      else { if(h[j]>=slP){res='loss';ex=j;break;} if(lw[j]<=tpP){res='win';ex=j;break;} }
+    }
+    if(!res){i++;continue;}
+    trades.push({res, net:(res==='win'?tpMove:-slMove)-FEE_PCT, tp:tpMove, sl:slMove});
+    i=ex+1;                                                          // no overlapping trades
+  }
+  const n=trades.length, wins=trades.filter(t=>t.res==='win').length;
+  const winRate=n?wins/n:0;
+  const sumW=trades.filter(t=>t.net>0).reduce((s,t)=>s+t.net,0);
+  const sumL=-trades.filter(t=>t.net<0).reduce((s,t)=>s+t.net,0);
+  const pf=sumL>0?sumW/sumL:(sumW>0?99:0);
+  const exp=n?trades.reduce((s,t)=>s+t.net,0)/n:0;                   // net price % per trade
+  const avgTp=n?trades.reduce((s,t)=>s+t.tp,0)/n:0, avgSl=n?trades.reduce((s,t)=>s+t.sl,0)/n:0;
+  const beWR=(avgSl+avgTp)>0?(avgSl+FEE_PCT)/(avgTp+avgSl):0;        // win rate needed to break even
+  let verdict = n<20 ? 'low-sample' : (exp>0 && pf>=1.2) ? 'edge' : (exp>0?'thin':'negative');
+  return {n,wins,losses:n-wins,winRate,pf,exp,expLev:exp*cfg.leverage,net:trades.reduce((s,t)=>s+t.net,0),beWR,verdict};
+}
+
 /* ---------- data ---------- */
 async function fetchKlines(symbol, interval, limit=300){
   const r = await fetch(`${API}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
@@ -497,7 +555,7 @@ async function scan(){
   }
 }
 
-const HTF_MAP={'5m':'1h','15m':'1h','30m':'4h'};
+const HTF_MAP={'5m':'1h','15m':'1h','30m':'4h','1h':'4h','4h':'1d'};
 function readCfg(){
   const tf=state.tf;
   return {
@@ -726,11 +784,13 @@ async function selectCoin(symbol){
   let kl, htfKl=null;
   try{
     [kl, htfKl]=await Promise.all([
-      fetchKlines(symbol, cfg.tf, 300),
+      fetchKlines(symbol, cfg.tf, 1000),   // deep history for a meaningful backtest
       cfg.useHtf ? fetchKlines(symbol, cfg.htf2, 220).catch(()=>null) : Promise.resolve(null)
     ]);
   }catch(e){ return; }
   const a=analyze(kl, cfg, htfKl);
+  state.selectedKl=kl;          // cache so leverage/TP tweaks can re-backtest instantly
+  renderBacktest(kl, cfg);
 
   state.candle.setData(kl.map(k=>({time:Math.floor(k[0]/1000),open:+k[1],high:+k[2],low:+k[3],close:+k[4]})));
   state.vol.setData(kl.map(k=>({time:Math.floor(k[0]/1000),value:+k[5],color:(+k[4]>=+k[1])?'rgba(22,199,132,.4)':'rgba(234,57,67,.4)'})));
@@ -788,6 +848,30 @@ async function selectCoin(symbol){
   startLivePoll(symbol);
 }
 
+function renderBacktest(kl, cfg){
+  const el=document.getElementById('backtest');
+  const raw=backtest(kl, cfg, false);
+  const filt=backtest(kl, cfg, true);
+  const vlabel={edge:'✅ POSITIVE EDGE',thin:'🟡 THIN EDGE',negative:'❌ NEGATIVE — loses after fees','low-sample':'⚪ too few trades'};
+  const vcls={edge:'good',thin:'caut',negative:'bad','low-sample':'caut'};
+  const col=p=>p>=0?'pos':'neg';
+  const card=(title,b,note)=>`
+    <div class="bt ${vcls[b.verdict]==='good'?'sgood':vcls[b.verdict]==='bad'?'sbad':'scaut'}">
+      <div class="top"><b>${title}</b> <span class="rate ${vcls[b.verdict]}">${vlabel[b.verdict]}</span></div>
+      <div class="row"><span>Trades · Win rate</span><b>${b.n} · ${(b.winRate*100).toFixed(0)}%</b></div>
+      <div class="row"><span>Profit factor</span><b class="${b.pf>=1.2?'pos':'neg'}">${b.pf.toFixed(2)}</b></div>
+      <div class="row"><span>Expectancy / trade</span><b class="${col(b.exp)}">${b.exp>=0?'+':''}${b.exp.toFixed(3)}% price · ${b.expLev>=0?'+':''}${b.expLev.toFixed(2)}% @${cfg.leverage}x</b></div>
+      <div class="row"><span>Net over ${b.n} trades</span><b class="${col(b.net)}">${b.net>=0?'+':''}${b.net.toFixed(1)}% price</b></div>
+      <div class="row"><span>Win rate needed (breakeven)</span><b>${(b.beWR*100).toFixed(0)}% · you got ${(b.winRate*100).toFixed(0)}%</b></div>
+      ${note?`<div class="note">${note}</div>`:''}
+    </div>`;
+  el.innerHTML=`
+    <div class="bt-grid">
+      ${card('This method (every confirmed cross)', raw, 'Exactly what the signals table fires.')}
+      ${card('+ Trend filter (only with EMA200)', filt, 'Same method, but only trades aligned with the EMA200 trend.')}
+    </div>
+    <div class="note" style="margin-top:10px">Backtested on the last ${kl.length} candles of ${cfg.tf}, TP ${cfg.tpPct}%/${cfg.leverage}x (≈${(cfg.tpPct/cfg.leverage).toFixed(2)}% move), 1.5×ATR stop, ${FEE_PCT}% round-trip fees. <b>Expectancy is the verdict</b> — if it's negative, the method loses money at <i>any</i> leverage; leverage only changes how fast.</div>`;
+}
 function updateChartInfo(symbol, a){
   const r=state.rows.find(x=>x.symbol===symbol);
   const chg=r?.chg??0;
@@ -881,7 +965,10 @@ document.querySelectorAll('th[data-sort]').forEach(th=>{
 });
 // leverage / TP only affect the trade-setup math, not detection — re-render instantly
 ['leverage','tpPct'].forEach(id=>{
-  document.getElementById(id).onchange=()=>renderTradeSetups();
+  document.getElementById(id).onchange=()=>{
+    renderTradeSetups();
+    if(state.selectedKl) renderBacktest(state.selectedKl, readCfg());  // re-test with new TP/leverage
+  };
 });
 document.getElementById('autoChk').onchange=e=>setupAuto(e.target.checked);
 function setupAuto(on){
